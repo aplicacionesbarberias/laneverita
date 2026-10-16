@@ -369,7 +369,7 @@ const S = {
   user:null, perfil:null, dueno:false, tab:null,
   puntos:[], productos:[], stock:{}, costos:{},
   per:{tipo:'semana', d1:null, d2:null}, fPunto:0,
-  ventas:[], vcost:{}, compras:[], gastos:[], base:[], ajustes:[], liqs:[], salidas:[], fijos:[], gastosMes:[], tot:null, salidaSel:null, pagarFijo:null,
+  ventas:[], vcost:{}, compras:[], gastos:[], base:[], ajustes:[], liqs:[], salidas:[], fiadosPend:[], cobrados:[], fiadoAbierto:null, fijos:[], gastosMes:[], tot:null, salidaSel:null, pagarFijo:null,
   pv:null, carrito:{}, busq:'', cat:'Todas', recibido:'', cartOpen:false,
   invBusq:'', invInact:false, busy:false, loaded:false
 };
@@ -443,7 +443,9 @@ async function cargarCatalogo() {
 async function cargarPeriodo() {
   const {a, b} = rango(); const A = a.toISOString(), B = b.toISOString();
   const rng = q => q.gte('fecha', A).lt('fecha', B).order('fecha', {ascending:false});
-  const tareas = [all(() => rng(sb.from('ventas').select('*, venta_items(*)'))), all(() => rng(sb.from('salidas_caja').select('*')))];
+  const tareas = [all(() => rng(sb.from('ventas').select('*, venta_items(*)'))), all(() => rng(sb.from('salidas_caja').select('*'))),
+    all(() => sb.from('ventas').select('*, venta_items(*)').eq('fiado', true).is('pagado_en', null).eq('anulada', false).order('fecha')),
+    all(() => sb.from('ventas').select('id,total,punto_id,cliente,fecha,pagado_en').eq('anulada', false).gte('pagado_en', A).lt('pagado_en', B))];
   if (S.dueno) tareas.push(
     all(() => rng(sb.from('venta_costos').select('item_id,costo_unit,fecha'))),
     all(() => rng(sb.from('compras').select('*'))),
@@ -456,16 +458,16 @@ async function cargarPeriodo() {
     all(() => sb.from('gastos').select('*').not('fijo_id', 'is', null).gte('fecha', inicioMes().toISOString()))
   );
   const r = await Promise.all(tareas);
-  S.ventas = r[0]; S.salidas = r[1];
+  S.ventas = r[0]; S.salidas = r[1]; S.fiadosPend = r[2]; S.cobrados = r[3];
   if (S.dueno) {
-    S.vcost = {}; r[2].forEach(x => S.vcost[x.item_id] = +x.costo_unit);
-    [S.compras, S.gastos, S.base, S.ajustes, S.liqs, S.tot, S.fijos, S.gastosMes] = r.slice(3);
+    S.vcost = {}; r[4].forEach(x => S.vcost[x.item_id] = +x.costo_unit);
+    [S.compras, S.gastos, S.base, S.ajustes, S.liqs, S.tot, S.fijos, S.gastosMes] = r.slice(5);
   }
 }
 function guardarCache() {
   lsSet('nv-cache-' + S.user.id, {
     puntos:S.puntos, productos:S.productos, stock:S.stock, costos:S.costos, per:S.per,
-    ventas:S.ventas, vcost:S.vcost, compras:S.compras, gastos:S.gastos, base:S.base, ajustes:S.ajustes, liqs:S.liqs, salidas:S.salidas, fijos:S.fijos, gastosMes:S.gastosMes, tot:S.tot
+    ventas:S.ventas, vcost:S.vcost, compras:S.compras, gastos:S.gastos, base:S.base, ajustes:S.ajustes, liqs:S.liqs, salidas:S.salidas, fiadosPend:S.fiadosPend, cobrados:S.cobrados, fijos:S.fijos, gastosMes:S.gastosMes, tot:S.tot
   });
 }
 let cargando = null;
@@ -649,7 +651,7 @@ function caja() {
   const base = (+t.ingresos||0) - (+t.retiros||0);
   const queda = base - (+t.compras||0) - (+t.gastos||0);
   const ventasCaja = (+t.ventas||0) - (+t.salidas||0);
-  return { base, compras:+t.compras||0, gastos:+t.gastos||0, ventas:+t.ventas||0, salidas:+t.salidas||0, ventasCaja, queda, total: queda + ventasCaja };
+  return { base, compras:+t.compras||0, gastos:+t.gastos||0, ventas:+t.ventas||0, salidas:+t.salidas||0, ventasCaja, queda, total: queda + ventasCaja, fiado:+t.fiado||0 };
 }
 
 /* ---------- RESUMEN ---------- */
@@ -696,7 +698,8 @@ function vResumen() {
     <div class="kpi k-gan"><div class="t">Ganancia</div><div class="v num pos">${$$(R.ganancia)}</div><div class="s">Margen ${pct(R.ganancia, R.ventas)}% · Ventas − costo</div></div>
     <div class="kpi k-gas"><div class="t">Gastos</div><div class="v num neg">${$$(R.gastos)}</div><div class="s">${p ? 'Solo gastos de este punto' : 'Arriendo, hielo, etc.'}</div></div>
     <div class="kpi k-com"><div class="t">Inversión (compras)</div><div class="v num">${$$(R.compras)}</div><div class="s">Mercancía comprada en el periodo</div></div>
-    <div class="kpi k-caja"><div class="t">Total en caja</div><div class="v num">${$$(K.total)}</div><div class="s">Base que queda + ventas (acumulado)</div></div>
+    <div class="kpi k-caja"><div class="t">Total en caja</div><div class="v num">${$$(K.total)}</div><div class="s">Base que queda + ventas cobradas (acumulado)</div></div>
+    ${K.fiado ? `<div class="kpi k-com"><div class="t">Fiado por cobrar</div><div class="v num" style="color:var(--warn)">${$$(K.fiado)}</div><div class="s">Lo que te deben</div></div>` : ''}
   </div>
   <div class="grid2">
     <div class="card"><h3>Ventas por ${S.per.tipo==='todo'||dias>31?'mes':'día'}</h3>${R.ventas ? chart : '<div class="empty">Aún no hay ventas en este periodo</div>'}</div>
@@ -751,21 +754,33 @@ function vVender() {
   ${items.length ? `<div class="cartbar"><div class="in">
     <div class="tot"><small>${nU} ${nU === 1 ? 'producto' : 'productos'}</small><b class="num">${$$(total)}</b></div>
     <div class="paga"><input class="i num" id="recibido" inputmode="numeric" placeholder="Paga con…" value="${esc(S.recibido)}"><div class="small" id="vuelto">${rec ? (rec >= total ? `Vuelto <b class="pos num">${$$(rec - total)}</b>` : `<span class="neg">Faltan ${$$(total - rec)}</span>`) : ''}</div></div>
-    <div class="btns"><button class="btn line" data-a="vaciar" title="Borrar todo">${ic('trash')}</button><button class="btn ok" data-a="cobrar">Registrar venta</button></div>
+    <div class="btns"><button class="btn line" data-a="vaciar" title="Borrar todo">${ic('trash')}</button><button class="btn line" data-a="fiar" style="color:var(--warn);border-color:var(--warn)">Fiar</button><button class="btn ok" data-a="cobrar">Registrar venta</button></div>
   </div></div>` : ''}`;
 }
-async function cobrar(btn) {
+function mFiar() {
+  const items = Object.entries(S.carrito).filter(([, c]) => c > 0);
+  if (!items.length) return;
+  const total = sum(items, ([id, c]) => prod(+id).precio_venta * c);
+  const nombres = [...new Set([...S.fiadosPend, ...S.ventas.filter(v => v.fiado)].map(v => v.cliente.trim()))].sort();
+  const ov = modal(`<h3>Fiar ${$$(total)}</h3>
+    <p class="small muted" style="margin-top:-6px">${items.map(([id, c]) => `${c}× ${esc(prod(+id).nombre)}`).join(', ')}</p>
+    <form id="fFiar"><label class="f">¿A nombre de quién?<input class="i" name="cli" list="dlCli" required autocomplete="off" placeholder="Ej: Freddy Borja"><datalist id="dlCli">${nombres.map(n => `<option value="${esc(n)}">`).join('')}</datalist></label>
+    <p class="small muted">Sale del inventario de una vez. La plata se cuenta cuando pague: en Ventas → Fiados por cobrar → “Pagó”.</p>
+    <div class="acts"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn" style="background:var(--warn)">Guardar fiado</button></div></form>`);
+  ov.querySelector('#fFiar').onsubmit = e => { e.preventDefault(); const n = e.target.cli.value.trim(); if (!n) return; closeModal(); cobrar(null, n); };
+}
+async function cobrar(btn, cliente = null) {
   const items = Object.entries(S.carrito).filter(([, c]) => c > 0).map(([id, c]) => ({producto_id:+id, cantidad:c}));
   if (!items.length) return;
   const total = sum(items, x => prod(x.producto_id).precio_venta * x.cantidad);
-  btn.disabled = true; btn.textContent = 'Guardando…';
+  if (btn) { btn.disabled = true; btn.textContent = 'Guardando…'; }
   try {
-    await rpc('registrar_venta', {p_punto:S.pv, p_items:items});
+    await rpc('registrar_venta', {p_punto:S.pv, p_items:items, p_cliente:cliente});
     items.forEach(x => S.stock[S.pv + '-' + x.producto_id] = stk(S.pv, x.producto_id) - x.cantidad);
     S.carrito = {}; S.recibido = ''; S.cartOpen = false;
-    toast('Venta registrada · ' + $$(total), 'ok');
+    toast(cliente ? `Fiado a ${cliente} · ${$$(total)}` : 'Venta registrada · ' + $$(total), 'ok');
     render(); recargar({silencioso:true});
-  } catch (e) { toast(errMsg(e), 'bad'); btn.disabled = false; btn.textContent = 'Registrar venta'; recargar({silencioso:true}); }
+  } catch (e) { toast(errMsg(e), 'bad'); if (btn) { btn.disabled = false; btn.textContent = 'Registrar venta'; } recargar({silencioso:true}); }
 }
 
 /* ---------- INVENTARIO ---------- */
@@ -917,15 +932,17 @@ function vVentas() {
   const liqs = S.dueno ? S.liqs.filter(l => !p || l.punto_id === p) : [];
   const SAL = S.salidas.filter(x => !p || x.punto_id === p), totSal = sum(SAL, x => x.monto);
   const TIPO = {compra:['Compra de mercancía',''], gasto:['Gasto','bad'], otro:['Otro','warn']};
+  const L = liq(p);
   return `${periodoBar()}
   <div class="row between" style="margin-bottom:12px"><h2 style="margin:0">Ventas ${S.dueno ? '' : `<span class="tag">${esc(nombrePunto(p))}</span>`}</h2>${S.dueno ? puntoChips(p, 'fpunto') : ''}</div>
   <div class="kpis">
     <div class="kpi k-ventas"><div class="t">Total vendido</div><div class="v num">${$$(total)}</div><div class="s">${rangoTxt()}</div></div>
     <div class="kpi k-gan"><div class="t">Ventas</div><div class="v num">${V.length}</div><div class="s">${unid} unidades</div></div>
     <div class="kpi k-gas"><div class="t">Sacado de la caja</div><div class="v num neg">${$$(totSal)}</div><div class="s">${SAL.length} salidas</div></div>
-    <div class="kpi k-caja"><div class="t">Debe entregar</div><div class="v num">${$$(total - totSal)}</div><div class="s">${total - totSal < 0 ? '<span class="neg">Se sacó más de lo vendido</span>' : 'Vendido − lo sacado'}</div></div>
+    <div class="kpi k-caja"><div class="t">Debe entregar</div><div class="v num">${$$(L.debe)}</div><div class="s">${L.debe < 0 ? '<span class="neg">Se sacó más de lo vendido</span>' : 'Contado + fiados pagados − lo sacado'}</div></div>
     ${S.dueno ? `<div class="kpi k-caja"><div class="t">Liquidado</div><div class="v num">${$$(sum(liqs, l => l.entregado))}</div><div class="s">${liqs.length} liquidaciones</div></div>` : ''}
   </div>
+  ${vFiados(p)}
   <div class="grid2">
     <div class="card"><div class="row between" style="margin-bottom:6px"><h3 style="margin:0">Resumen para liquidar</h3>
       <div class="row" style="gap:6px"><button class="ibtn" data-a="copiar" title="Copiar">${ic('copy')}</button><button class="ibtn" data-a="wa" title="Enviar por WhatsApp">${ic('wa')}</button>
@@ -933,7 +950,10 @@ function vVentas() {
       ${filas.length ? `<table class="t"><thead><tr><th>Producto</th><th class="r">Unid.</th><th class="r">Total</th></tr></thead><tbody>
       ${filas.map(x => `<tr><td>${esc(x.n)}</td><td class="r num">${x.u}</td><td class="r num">${$$(x.t)}</td></tr>`).join('')}</tbody>
       <tfoot><tr><td>Total vendido</td><td class="r num">${unid}</td><td class="r num">${$$(total)}</td></tr>
-      ${totSal ? `<tr><td class="neg">− Sacado de la caja</td><td></td><td class="r num neg">${$$(totSal)}</td></tr><tr><td>Debe entregar</td><td></td><td class="r num">${$$(total - totSal)}</td></tr>` : ''}</tfoot></table>` : '<div class="empty">Sin ventas en este periodo</div>'}
+      ${L.fiadoNuevo ? `<tr><td class="neg">− Fiado (no han pagado)</td><td></td><td class="r num neg">${$$(L.fiadoNuevo)}</td></tr>` : ''}
+      ${L.cobrado ? `<tr><td class="pos">+ Fiados que pagaron</td><td></td><td class="r num pos">${$$(L.cobrado)}</td></tr>` : ''}
+      ${totSal ? `<tr><td class="neg">− Sacado de la caja</td><td></td><td class="r num neg">${$$(totSal)}</td></tr>` : ''}
+      ${L.fiadoNuevo || L.cobrado || totSal ? `<tr><td>Debe entregar</td><td></td><td class="r num">${$$(L.debe)}</td></tr>` : ''}</tfoot></table>` : '<div class="empty">Sin ventas en este periodo</div>'}
       <div class="row between" style="margin-top:18px"><h3 style="margin:0">Plata sacada de la caja</h3><button class="btn sm ghost" data-a="salida">${ic('plus')}Saqué plata</button></div>
       <p class="small muted" style="margin:4px 0 0">Si de lo vendido se cogió plata para comprar mercancía o pagar algo, regístralo aquí y se descuenta de lo que hay que entregar.</p>
       ${SAL.map(x => `<div class="li"><div class="m"><b>${esc(x.concepto)}</b><span><span class="tag ${TIPO[x.tipo][1]}">${TIPO[x.tipo][0]}</span> ${esc(nombrePunto(x.punto_id))} · ${fFecha(x.fecha)}${x.quien ? ' · ' + esc(x.quien) : ''}${x.tipo === 'compra' ? (x.estado === 'pendiente' ? ' · <b style="color:var(--warn)">falta registrar productos</b>' : ' · productos registrados') : ''}</span></div>
@@ -944,36 +964,62 @@ function vVentas() {
     </div>
     <div class="card"><h3>Detalle de ventas</h3>
       ${todas.length ? todas.slice(0, 300).map(v => `<div class="li ${v.anulada?'anul':''}"><div class="m"><b>${(v.venta_items||[]).map(it => `${it.cantidad}× ${esc(it.nombre)}`).join(', ')}</b>
-        <span>${fFecha(v.fecha)} ${fHora(v.fecha)} · ${esc(nombrePunto(v.punto_id))}${v.vendedor ? ' · ' + esc(v.vendedor) : ''}${v.anulada ? ' · <b class="neg">ANULADA</b>' : ''}</span></div>
+        <span>${fFecha(v.fecha)} ${fHora(v.fecha)} · ${esc(nombrePunto(v.punto_id))}${v.vendedor ? ' · ' + esc(v.vendedor) : ''}${v.fiado ? ` · <span class="tag ${v.pagado_en ? 'ok' : 'warn'}">${v.pagado_en ? 'Fiado pagado' : 'Fiado'} · ${esc(v.cliente)}</span>` : ''}${v.anulada ? ' · <b class="neg">ANULADA</b>' : ''}</span></div>
         <div class="a num">${$$(v.total)}</div>${S.dueno && !v.anulada ? `<button class="ibtn" data-a="anular" data-v="${v.id}" title="Anular">${ic('x')}</button>` : ''}</div>`).join('')
         + (todas.length > 300 ? `<div class="small muted" style="padding-top:8px">Mostrando 300 de ${todas.length}</div>` : '')
         : '<div class="empty">Sin ventas</div>'}
     </div>
   </div>`;
 }
+// Plata que debe entregar un punto: lo vendido de contado + fiados que pagaron − lo sacado de la caja
+function liq(p) {
+  const V = ventasVal(p);
+  const vendido = sum(V, v => v.total), fiadoNuevo = sum(V.filter(v => v.fiado && !v.pagado_en), v => v.total);
+  const contado = sum(V.filter(v => !v.fiado), v => v.total);
+  const cobrado = sum(S.cobrados.filter(v => !p || v.punto_id === p), v => v.total);
+  const sal = sum(S.salidas.filter(x => !p || x.punto_id === p), x => x.monto);
+  return { vendido, fiadoNuevo, contado, cobrado, sal, debe: contado + cobrado - sal };
+}
+function vFiados(p) {
+  const F = S.fiadosPend.filter(v => !p || v.punto_id === p);
+  const cl = {};
+  F.forEach(v => { const k = v.cliente.trim().toLowerCase(); const c = cl[k] ||= {n:v.cliente.trim(), t:0, vs:[]}; c.t += +v.total; c.vs.push(v); });
+  const lista = Object.entries(cl).sort((a, b) => b[1].t - a[1].t);
+  const dias = d => Math.floor((Date.now() - new Date(d)) / 864e5);
+  return `<div class="card" style="${lista.length ? 'border:2px solid var(--warn-soft)' : ''}">
+    <div class="row between"><h3 style="margin:0">Fiados por cobrar</h3><b class="num" style="color:var(--warn)">${$$(sum(F, v => v.total))}</b></div>
+    ${lista.length ? lista.map(([k, c]) => { const viejo = dias(c.vs[0].fecha); const ab = S.fiadoAbierto === k; return `<div class="li" style="flex-wrap:wrap">
+      <div class="m" data-a="fiadoVer" data-v="${esc(k)}" style="cursor:pointer"><b>${esc(c.n)}</b><span>${c.vs.length} ${c.vs.length === 1 ? 'fiado' : 'fiados'} · desde ${fFecha(c.vs[0].fecha)} ${viejo >= 1 ? `(<span class="${viejo >= 7 ? 'neg' : ''}">hace ${viejo} día${viejo === 1 ? '' : 's'}</span>)` : '(hoy)'} · ${ab ? 'ocultar' : 'ver detalle'}</span></div>
+      <div class="a num">${$$(c.t)}</div><button class="btn sm ok" data-a="pagarCliente" data-v="${esc(k)}">Pagó</button>
+      ${ab ? `<div style="flex-basis:100%">${c.vs.map(v => `<div class="row between small" style="padding:6px 0;border-top:1px dashed var(--line);flex-wrap:nowrap"><span>${fFecha(v.fecha)} · ${(v.venta_items||[]).map(it => `${it.cantidad}× ${esc(it.nombre)}`).join(', ')}${S.dueno ? ' · ' + esc(nombrePunto(v.punto_id)) : ''}</span><span class="row" style="gap:6px;flex-wrap:nowrap"><b class="num">${$$(v.total)}</b><button class="btn sm line" data-a="pagarFiado" data-v="${v.id}">Pagó esta</button></span></div>`).join('')}</div>` : ''}
+    </div>`; }).join('')
+    : '<div class="small muted" style="margin-top:6px">Nadie debe. Para fiar, en Vender agrega los productos y dale “Fiar”.</div>'}
+  </div>`;
+}
 function textoLiquidacion() {
   const p = S.dueno ? S.fPunto : S.perfil.punto_id; const V = ventasVal(p); const pp = {};
   V.forEach(v => (v.venta_items||[]).forEach(it => { const x = pp[it.nombre] ||= {u:0, t:0}; x.u += it.cantidad; x.t += +it.subtotal; }));
   const lin = Object.entries(pp).sort((a, b) => b[1].t - a[1].t).map(([n, x]) => `• ${x.u} × ${n} = ${$$(x.t)}`);
-  const SAL = S.salidas.filter(x => !p || x.punto_id === p), tv = sum(V, v => v.total), ts = sum(SAL, x => x.monto);
-  const sal = SAL.length ? `\n\nSacado de la caja:\n${SAL.map(x => `• ${x.concepto} = −${$$(x.monto)}`).join('\n')}\n*DEBE ENTREGAR: ${$$(tv - ts)}*` : '';
-  return `*${CONFIG.NOMBRE}*\nVentas ${p ? nombrePunto(p) : 'todos los puntos'}\n${rangoTxt()}\n\n${lin.join('\n')}\n\n*TOTAL VENDIDO: ${$$(tv)}* (${V.length} ventas)${sal}`;
+  const SAL = S.salidas.filter(x => !p || x.punto_id === p), L = liq(p);
+  const extra = [L.fiadoNuevo ? `− Fiado (no han pagado): ${$$(L.fiadoNuevo)}` : '', L.cobrado ? `+ Fiados que pagaron: ${$$(L.cobrado)}` : '',
+    ...SAL.map(x => `− ${x.concepto}: ${$$(x.monto)}`)].filter(Boolean);
+  return `*${CONFIG.NOMBRE}*\nVentas ${p ? nombrePunto(p) : 'todos los puntos'}\n${rangoTxt()}\n\n${lin.join('\n')}\n\n*TOTAL VENDIDO: ${$$(L.vendido)}* (${V.length} ventas)${extra.length ? '\n' + extra.join('\n') : ''}\n*DEBE ENTREGAR: ${$$(L.debe)}*`;
 }
 function mLiquidar() {
   const pts = S.fPunto ? pVenta().filter(p => p.id === S.fPunto) : pVenta();
   const {a, b} = rango();
   const ov = modal(`<h3>Liquidar ventas</h3><p class="small muted" style="margin-top:-6px">${rangoTxt()}</p>
     <form id="fLq" class="row" style="gap:12px">
-      <label class="f">Punto<select class="i" name="pt">${pts.map(p => `<option value="${p.id}">${esc(p.nombre)} — vendió ${$$(sum(ventasVal(p.id), v => v.total))}, debe entregar ${$$(sum(ventasVal(p.id), v => v.total) - sum(S.salidas.filter(x => x.punto_id === p.id), x => x.monto))}</option>`).join('')}</select></label>
+      <label class="f">Punto<select class="i" name="pt">${pts.map(p => `<option value="${p.id}">${esc(p.nombre)} — vendió ${$$(liq(p.id).vendido)}, debe entregar ${$$(liq(p.id).debe)}</option>`).join('')}</select></label>
       <label class="f">Dinero entregado<input class="i num" name="ent" inputmode="numeric" required></label>
       <label class="f" style="flex-basis:100%">Nota<input class="i" name="nota" placeholder="Opcional"></label>
       <div class="small" id="lqDif" style="flex-basis:100%"></div>
       <div class="acts" style="flex-basis:100%"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn ok">Guardar liquidación</button></div>
     </form>`);
   const f = ov.querySelector('#fLq');
-  const totPt = () => sum(ventasVal(+f.pt.value), v => v.total);
-  const salPt = () => sum(S.salidas.filter(x => x.punto_id === +f.pt.value), x => x.monto);
-  const debe = () => totPt() - salPt();
+  const totPt = () => liq(+f.pt.value).vendido;
+  const salPt = () => liq(+f.pt.value).vendido - liq(+f.pt.value).debe;
+  const debe = () => liq(+f.pt.value).debe;
   const upd = () => { const d = num(f.ent.value) - debe(); ov.querySelector('#lqDif').innerHTML = f.ent.value ? (d === 0 ? '<span class="pos">Cuadra exacto</span>' : `<span class="${d<0?'neg':'pos'}">${d<0?'Faltan':'Sobran'} ${$$(Math.abs(d))}</span>`) : ''; };
   f.ent.value = Math.max(0, Math.round(debe())); upd(); f.ent.oninput = upd; f.pt.onchange = () => { f.ent.value = Math.max(0, Math.round(debe())); upd(); };
   f.onsubmit = async e => {
@@ -1254,6 +1300,14 @@ document.addEventListener('click', async e => {
     case 'vaciar': S.carrito = {}; S.recibido = ''; render(); break;
     case 'cartToggle': S.cartOpen = !S.cartOpen; render(); break;
     case 'cobrar': cobrar(el); break;
+    case 'fiar': mFiar(); break;
+    case 'fiadoVer': S.fiadoAbierto = S.fiadoAbierto === v ? null : v; render(); break;
+    case 'pagarCliente': case 'pagarFiado': {
+      const ids = a === 'pagarFiado' ? [+v] : S.fiadosPend.filter(x => x.cliente.trim().toLowerCase() === v).map(x => x.id);
+      const tot = sum(S.fiadosPend.filter(x => ids.includes(x.id)), x => x.total);
+      const quien = S.fiadosPend.find(x => ids.includes(x.id))?.cliente || '';
+      if (!await confirmar(`¿${esc(quien)} pagó ${$$(tot)}?`, 'Sí, pagó')) break;
+      try { await rpc('pagar_fiado', {p_ids:ids}); toast('Fiado pagado · ' + $$(tot), 'ok'); recargar({catalogo:false}); } catch (er) { toast(errMsg(er), 'bad'); } break; }
     case 'nuevoProd': mProducto(); break;
     case 'editProd': mProducto(+v); break;
     case 'traslado': mTraslado(+v); break;
