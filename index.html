@@ -5,7 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b2a4a">
 <title>LA NEVERITA V&amp;A</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='14' y='4' width='36' height='56' rx='8' fill='%230b2a4a'/%3E%3Crect x='14' y='22' width='36' height='3' fill='%2372d3f5'/%3E%3Crect x='20' y='10' width='3' height='8' rx='1.5' fill='%2372d3f5'/%3E%3Crect x='20' y='30' width='3' height='12' rx='1.5' fill='%2372d3f5'/%3E%3C/svg%3E">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="La Neverita">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="description" content="Bebidas frías, mecato y mucho más. ¡Sabor, frescura y el mejor antojo!">
+<meta property="og:type" content="website">
+<meta property="og:title" content="LA NEVERITA V&amp;A">
+<meta property="og:description" content="Bebidas frías, mecato y mucho más. ¡Sabor, frescura y el mejor antojo!">
+<meta property="og:url" content="https://aplicacionesbarberias.github.io/laneverita/">
+<meta property="og:image" content="https://aplicacionesbarberias.github.io/laneverita/preview.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://aplicacionesbarberias.github.io/laneverita/preview.jpg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
@@ -198,6 +214,12 @@ table.t tfoot td{font-weight:700;border-top:2px solid var(--line)}
 .modal .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
 @keyframes fi{from{opacity:0}}
 @keyframes up{from{transform:translateY(14px);opacity:0}}
+.instalar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(150px + env(safe-area-inset-bottom));z-index:75;width:calc(100% - 24px);max-width:440px;background:#fff;border-radius:18px;box-shadow:0 12px 40px rgba(0,0,0,.3);padding:12px;display:flex;align-items:center;gap:12px;animation:up .25s}
+.instalar img{width:52px;height:52px;border-radius:12px;flex:none}
+.instalar .tx{flex:1;min-width:0}.instalar .tx b{display:block;font-size:15px}.instalar .tx span{font-size:12.5px;color:var(--muted)}
+.instalar .x{border:0;background:none;color:var(--muted);font-size:20px;cursor:pointer;padding:4px 6px}
+@media (min-width:761px){.instalar{bottom:24px}}
+.instalar.arriba{top:max(12px,env(safe-area-inset-top));bottom:auto}
 #toast{position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;width:calc(100% - 32px);max-width:420px}
 .tst{background:var(--navy);color:#fff;padding:12px 16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.2);font-weight:600;animation:up .2s;text-align:center}
 .tst.ok{background:var(--ok)}.tst.bad{background:var(--bad)}
@@ -558,6 +580,7 @@ function mPin() {
    ===================================================================== */
 function render() {
   if (!S.user) return;
+  $('#instalar')?.classList.remove('arriba');
   const yaHay = $('#main');
   const scroll = window.scrollY;
   if (!yaHay) {
@@ -1272,6 +1295,29 @@ document.addEventListener('click', async e => {
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 window.addEventListener('focus', () => { if (S.user && S.loaded) recargar({silencioso:true}); });
+
+/* ---------- instalar como app ---------- */
+let eventoInstalar = null;
+const yaInstalada = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const esIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+function avisoInstalar() {
+  if (yaInstalada() || $('#instalar')) return;
+  const cerrado = +lsGet('nv-inst-cerrado') || 0; if (Date.now() - cerrado < 3 * 864e5) return;
+  if (!eventoInstalar && !esIOS) return;
+  const el = document.createElement('div'); el.className = 'instalar' + (S.user ? '' : ' arriba'); el.id = 'instalar';
+  el.innerHTML = `<img src="icon-192.png" alt=""><div class="tx"><b>Descargar la aplicación</b><span>Instala La Neverita en tu celular y ábrela como una app</span></div>
+    <button class="btn ok sm" id="instBtn">Descargar</button><button class="x" id="instX" aria-label="Cerrar">×</button>`;
+  document.body.appendChild(el);
+  $('#instX').onclick = () => { lsSet('nv-inst-cerrado', Date.now()); el.remove(); };
+  $('#instBtn').onclick = async () => {
+    if (eventoInstalar) { eventoInstalar.prompt(); const r = await eventoInstalar.userChoice; eventoInstalar = null; el.remove(); if (r.outcome === 'accepted') toast('¡Listo! Búscala en tu pantalla de inicio', 'ok'); }
+    else modal(`<h3>Instalar en iPhone</h3><ol style="padding-left:20px;line-height:1.7"><li>Abre este link en <b>Safari</b>.</li><li>Toca el botón <b>Compartir</b> (el cuadrito con la flecha hacia arriba).</li><li>Elige <b>“Agregar a inicio”</b> y luego <b>Agregar</b>.</li></ol><div class="acts"><button class="btn" data-a="close">Entendido</button></div>`);
+  };
+}
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); eventoInstalar = e; avisoInstalar(); });
+window.addEventListener('appinstalled', () => { $('#instalar')?.remove(); toast('App instalada', 'ok'); });
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+setTimeout(avisoInstalar, 1500);
 
 iniciar();
 </script>
