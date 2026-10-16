@@ -29,7 +29,10 @@ label.chk input{margin-top:2px;flex:none}
 header{position:sticky;top:0;z-index:30;background:var(--navy);color:#fff;padding:10px 16px;display:flex;align-items:center;gap:12px;padding-top:max(10px,env(safe-area-inset-top))}
 .brand{display:flex;align-items:center;gap:10px;min-width:0}
 .brand svg{flex:none}
-.brand b{font-weight:800;letter-spacing:.5px;font-size:17px;white-space:nowrap}
+.brand>div{min-width:0}
+.brand b{font-weight:800;letter-spacing:.5px;font-size:17px;white-space:nowrap;display:block;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:420px){.brand b{font-size:14px}.hbtn{min-width:34px;padding:0 8px}}
+@media (max-width:380px){.brand b{display:none}.brand small{font-size:13px;color:#fff;font-weight:600}}
 .brand small{display:block;font-size:11.5px;color:#9fd8ef;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header .sp{flex:1}
 .hbtn{background:rgba(255,255,255,.1);border:0;color:#fff;border-radius:10px;height:36px;min-width:36px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}
@@ -159,6 +162,17 @@ table.t tfoot td{font-weight:700;border-top:2px solid var(--line)}
   .cartbar .btns{width:100%}.cartbar .btns .btn.ok{flex:1}
   .pos-pad{height:200px}
 }
+
+/* ---------- inventario ---------- */
+.icard{border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px;display:flex;flex-direction:column;gap:10px}
+.icard b{font-size:15px}
+.lug{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.icard .row.small{flex-wrap:wrap;gap:6px 12px}
+.lug span{background:#f3f7fb;border-radius:10px;padding:6px 8px;display:flex;flex-direction:column}
+.lug small{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lug b{font-size:18px;color:var(--navy)}
+.only-m{display:none}
+@media (max-width:760px){.only-d{display:none}.only-m{display:block}}
 
 /* ---------- list items ---------- */
 .li{display:flex;gap:12px;align-items:center;padding:11px 0;border-bottom:1px solid #eef2f6}
@@ -340,6 +354,8 @@ const S = {
 const nombrePunto = id => S.puntos.find(p => p.id === id)?.nombre || (id ? 'Punto ' + id : 'General');
 const prod = id => S.productos.find(p => p.id === id);
 const stk = (pt, pid) => S.stock[pt + '-' + pid] || 0;
+const pVenta = () => S.puntos.filter(p => !p.bodega);
+const bodega = () => S.puntos.find(p => p.bodega);
 const stkTotal = pid => S.puntos.reduce((a, p) => a + stk(p.id, pid), 0);
 const costo = pid => +S.costos[pid] || 0;
 
@@ -394,7 +410,8 @@ async function cargarCatalogo() {
     all(() => sb.from('productos').select('*').order('nombre')),
     all(() => sb.from('stock').select('*'))
   ]);
-  S.puntos = pts; S.productos = prods;
+  S.puntos = pts.sort((a, b) => (b.bodega === true) - (a.bodega === true) || a.id - b.id); S.productos = prods;
+  if (S.dueno && (!S.pv || S.puntos.find(p => p.id === S.pv)?.bodega)) S.pv = pVenta()[0]?.id;
   S.stock = {}; st.forEach(r => S.stock[r.punto_id + '-' + r.producto_id] = r.cantidad);
   if (S.dueno) {
     const c = await all(() => sb.from('productos_costo').select('*'));
@@ -572,8 +589,8 @@ function periodoBar() {
     ${S.per.tipo==='rango' ? `<div class="range"><input type="date" class="i" id="pd1" value="${S.per.d1||ymd(a)}"><span class="muted">a</span><input type="date" class="i" id="pd2" value="${S.per.d2||ymd(addDays(b,-1))}"></div>` : ''}
     <span class="lbl">${rangoTxt()}</span></div>`;
 }
-function puntoChips(cur, act, conTodos=true) {
-  const ops = (conTodos ? [[0,'Todos']] : []).concat(S.puntos.map(p => [p.id, p.nombre]));
+function puntoChips(cur, act, conTodos=true, lista=pVenta()) {
+  const ops = (conTodos ? [[0,'Todos']] : []).concat(lista.map(p => [p.id, p.nombre]));
   return `<div class="chips">${ops.map(([k,l]) => `<button class="chip ${cur===k?'on':''}" data-a="${act}" data-v="${k}">${esc(l)}</button>`).join('')}</div>`;
 }
 
@@ -633,7 +650,7 @@ function vResumen() {
       <div class="legend"><span><i style="background:var(--ok)"></i>Ganancia</span><span><i style="background:#b9d6e6"></i>Costo de lo vendido</span></div>`;
 
   const top = Object.entries(R.porProd).sort((x, y) => y[1].v - x[1].v);
-  const puntosVisibles = S.puntos.filter(pt => !p || pt.id === p);
+  const puntosVisibles = pVenta().filter(pt => !p || pt.id === p);
   let invCosto = 0, invVenta = 0; const bajos = [];
   for (const pr of S.productos.filter(x => x.activo)) {
     const q = p ? stk(p, pr.id) : stkTotal(pr.id);
@@ -742,31 +759,44 @@ function vInventario() {
       </tbody></table>` : '<div class="empty">Sin productos</div>'}</div>`;
   }
   let tc = 0, tv = 0;
-  const rows = lista.map(x => {
-    const tot = stkTotal(x.id), c = costo(x.id); tc += tot * c; tv += tot * x.precio_venta;
-    const low = tot <= 0 ? 'bad' : (x.stock_minimo && tot <= x.stock_minimo ? 'warn' : '');
-    return `<tr style="${x.activo?'':'opacity:.5'}"><td><b>${esc(x.nombre)}</b><br><span class="small muted">${esc(x.categoria)}${x.activo?'':' · inactivo'}</span></td>
+  let tu = 0; const porLugar = {}; S.puntos.forEach(p => porLugar[p.id] = {u:0, c:0, v:0});
+  const datos = lista.map(x => {
+    const tot = stkTotal(x.id), c = costo(x.id);
+    tu += tot; tc += tot * c; tv += tot * x.precio_venta;
+    S.puntos.forEach(p => { const q = stk(p.id, x.id), L = porLugar[p.id]; L.u += q; L.c += q * c; L.v += q * x.precio_venta; });
+    const low = tot <= 0 ? 'bad' : (x.stock_minimo && tot <= x.stock_minimo ? 'warn' : 'ok');
+    return {x, tot, c, low};
+  });
+  const acc = id => `<button class="ibtn" data-a="editProd" data-v="${id}" title="Editar">${ic('edit')}</button><button class="ibtn" data-a="traslado" data-v="${id}" title="Pasar a otro lugar">${ic('swap')}</button>`;
+  const rows = datos.map(({x, tot, c, low}) => `<tr style="${x.activo?'':'opacity:.5'}">
+      <td><b>${esc(x.nombre)}</b><br><span class="small muted">${esc(x.categoria)} · cuesta ${$$(c)} · vende ${$$(x.precio_venta)}${c ? ' · ' + pct(x.precio_venta - c, x.precio_venta) + '%' : ''}${x.activo?'':' · inactivo'}</span></td>
       ${S.puntos.map(p => `<td class="r num">${stk(p.id, x.id)}</td>`).join('')}
-      <td class="r"><span class="tag ${low}">${tot}</span></td>
-      <td class="r num">${$$(c)}</td><td class="r num"><b>${$$(x.precio_venta)}</b></td>
-      <td class="r num ${x.precio_venta - c >= 0 ? 'pos' : 'neg'}">${c ? pct(x.precio_venta - c, x.precio_venta) + '%' : '—'}</td>
-      <td class="r num">${$$(tot * c)}</td>
-      <td class="r" style="white-space:nowrap"><button class="ibtn" data-a="editProd" data-v="${x.id}" title="Editar">${ic('edit')}</button>
-      <button class="ibtn" data-a="traslado" data-v="${x.id}" title="Pasar a otro punto">${ic('swap')}</button></td></tr>`;
-  }).join('');
+      <td class="r"><span class="tag ${low}" style="font-size:13px">${tot} und</span></td>
+      <td class="r num">${$$(tot * c)}</td><td class="r num"><b>${$$(tot * x.precio_venta)}</b></td>
+      <td class="r" style="white-space:nowrap">${acc(x.id)}</td></tr>`).join('');
+  const cards = datos.map(({x, tot, c, low}) => `<div class="icard" style="${x.activo?'':'opacity:.5'}">
+      <div class="row between" style="flex-wrap:nowrap;align-items:flex-start"><div style="min-width:0"><b>${esc(x.nombre)}</b><div class="small muted">${esc(x.categoria)} · vende ${$$(x.precio_venta)}</div></div>
+        <span class="tag ${low}" style="font-size:15px;padding:4px 10px">${tot} und</span></div>
+      <div class="lug">${S.puntos.map(p => `<span><small>${esc(p.nombre)}</small><b class="num">${stk(p.id, x.id)}</b></span>`).join('')}</div>
+      <div class="row between small"><span class="muted">Al costo <b class="num" style="color:var(--ink)">${$$(tot * c)}</b></span><span class="muted">A la venta <b class="num" style="color:var(--ink)">${$$(tot * x.precio_venta)}</b></span><span>${acc(x.id)}</span></div>
+    </div>`).join('');
   return `<div class="row between" style="margin-bottom:12px"><h2 style="margin:0">Inventario</h2>
     <div class="row">${buscador}
+      ${bodega() ? `<button class="btn ice sm" data-a="enviar">${ic('truck')}Enviar a cancha</button>` : ''}
       <button class="btn ghost sm" data-a="conteo">${ic('check')}Conteo físico</button>
       <button class="btn sm" data-a="nuevoProd">${ic('plus')}Producto</button></div></div>
   <div class="kpis">
-    <div class="kpi k-com"><div class="t">Inventario al costo</div><div class="v num">${$$(tc)}</div><div class="s">Lo que te costó lo que hay</div></div>
-    <div class="kpi k-ventas"><div class="t">A precio de venta</div><div class="v num">${$$(tv)}</div><div class="s">Si vendes todo</div></div>
+    <div class="kpi k-caja"><div class="t">Unidades en inventario</div><div class="v num">${fmtN.format(tu)}</div><div class="s">${datos.length} productos</div></div>
+    <div class="kpi k-com"><div class="t">Vale al costo</div><div class="v num">${$$(tc)}</div><div class="s">Lo que te costó lo que hay</div></div>
+    <div class="kpi k-ventas"><div class="t">Vale a precio de venta</div><div class="v num">${$$(tv)}</div><div class="s">Si vendes todo</div></div>
     <div class="kpi k-gan"><div class="t">Ganancia por vender</div><div class="v num pos">${$$(tv - tc)}</div><div class="s">${pct(tv - tc, tv)}% de margen</div></div>
   </div>
-  <div class="card"><div class="row between" style="margin-bottom:6px"><span class="small muted">Costo = promedio por unidad según tus compras</span>
+  <div class="kpis">${S.puntos.map(p => { const L = porLugar[p.id]; return `<div class="kpi"><div class="t">${esc(p.nombre)}</div><div class="v num">${fmtN.format(L.u)} und</div><div class="s">Al costo ${$$(L.c)} · a la venta ${$$(L.v)}</div></div>`; }).join('')}</div>
+  <div class="card"><div class="row between" style="margin-bottom:6px"><span class="small muted">Unidades por lugar y cuánto vale. Costo = promedio por unidad según tus compras.</span>
     <label class="small muted chk"><input type="checkbox" id="invInact" ${S.invInact?'checked':''}> Ver inactivos</label></div>
-    ${lista.length ? `<div class="scrollx"><table class="t"><thead><tr><th>Producto</th>${S.puntos.map(p => `<th class="r">${esc(p.nombre)}</th>`).join('')}<th class="r">Total</th><th class="r">Costo u.</th><th class="r">Precio</th><th class="r">Margen</th><th class="r">Valor</th><th></th></tr></thead>
-    <tbody>${rows}</tbody></table></div>` : '<div class="empty">No hay productos. Crea uno o registra una compra.</div>'}
+    ${lista.length ? `<div class="scrollx only-d"><table class="t"><thead><tr><th>Producto</th>${S.puntos.map(p => `<th class="r">${esc(p.nombre)}</th>`).join('')}<th class="r">Total</th><th class="r">Vale al costo</th><th class="r">Vale a la venta</th><th></th></tr></thead>
+    <tbody>${rows}</tbody><tfoot><tr><td>Total</td>${S.puntos.map(p => `<td class="r num">${fmtN.format(porLugar[p.id].u)}</td>`).join('')}<td class="r num">${fmtN.format(tu)} und</td><td class="r num">${$$(tc)}</td><td class="r num">${$$(tv)}</td><td></td></tr></tfoot></table></div>
+    <div class="only-m">${cards}</div>` : '<div class="empty">No hay productos. Crea uno o registra una compra.</div>'}
   </div>`;
 }
 function catOptions() { return [...new Set(['Gaseosas','Cervezas','Mecato','Licores','Aguas y jugos','Dulces','Otros', ...S.productos.map(x => x.categoria)])].map(c => `<option value="${esc(c)}">`).join(''); }
@@ -798,7 +828,7 @@ function mTraslado(id) {
   const ov = modal(`<h3>Pasar “${esc(x.nombre)}” a otro punto</h3>
     <form id="fTr" class="row" style="gap:12px">
       <label class="f">Desde<select class="i" name="de">${S.puntos.map(p => `<option value="${p.id}">${esc(p.nombre)} (${stk(p.id, id)})</option>`).join('')}</select></label>
-      <label class="f">Hacia<select class="i" name="a">${S.puntos.map((p, i) => `<option value="${p.id}" ${i===1?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></label>
+      <label class="f">Hacia<select class="i" name="a">${S.puntos.map((p, i) => `<option value="${p.id}" ${p.id===pVenta()[0]?.id?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></label>
       <label class="f">Unidades<input class="i num" name="c" inputmode="numeric" required></label>
       <div class="acts" style="flex-basis:100%"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn">Pasar</button></div>
     </form>`);
@@ -809,11 +839,35 @@ function mTraslado(id) {
     } catch (er) { toast(errMsg(er), 'bad'); }
   };
 }
+function mEnviar(dest = pVenta()[0]?.id) {
+  const B = bodega(); if (!B) return;
+  const lista = S.productos.filter(x => x.activo && stk(B.id, x.id) > 0);
+  const ov = modal(`<h3>Enviar mercancía de la Bodega</h3>
+    <p class="small muted" style="margin-top:-6px">Escribe cuántas unidades mandas de cada producto. Sale de la bodega y entra al inventario de la cancha.</p>
+    <div style="margin-bottom:10px">${puntoChips(dest, 'enviarPt', false)}</div>
+    ${lista.length ? `<form id="fEnv"><div class="scrollx"><table class="t"><thead><tr><th>Producto</th><th class="r">En bodega</th><th class="r">En la cancha</th><th class="r" style="width:110px">Enviar</th></tr></thead><tbody>
+    ${lista.map(x => `<tr><td>${esc(x.nombre)}</td><td class="r num">${stk(B.id, x.id)}</td><td class="r num">${stk(dest, x.id)}</td>
+      <td class="r"><input class="i num" style="padding:6px 8px;text-align:right" inputmode="numeric" name="p${x.id}" data-max="${stk(B.id, x.id)}" placeholder="0"></td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="acts"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn ice">Enviar a ${esc(nombrePunto(dest))}</button></div></form>`
+    : '<div class="empty">La bodega está vacía. Registra una compra que llegue a la Bodega.</div><div class="acts"><button class="btn line" data-a="close">Cerrar</button></div>'}`, 'wide');
+  const f = ov.querySelector('#fEnv'); if (!f) return;
+  f.onsubmit = async e => {
+    e.preventDefault(); const items = []; let mal = null;
+    f.querySelectorAll('input[name^=p]').forEach(i => { const c = Math.round(num(i.value)); if (c > 0) { if (c > +i.dataset.max) mal = prod(+i.name.slice(1)).nombre; items.push({producto_id:+i.name.slice(1), cantidad:c}); } });
+    if (mal) return toast(`No hay tanto "${mal}" en la bodega`, 'bad');
+    if (!items.length) return toast('Escribe al menos una cantidad', 'bad');
+    const btn = f.querySelector('.acts .btn:last-child'); btn.disabled = true; btn.textContent = 'Enviando…';
+    try { await rpc('enviar_mercancia', {p_de:B.id, p_a:dest, p_items:items});
+      closeModal(); toast(`Enviado a ${nombrePunto(dest)}: ${sum(items, x => x.cantidad)} unidades`, 'ok'); recargar({periodo:false});
+    } catch (er) { toast(errMsg(er), 'bad'); btn.disabled = false; btn.textContent = 'Enviar'; }
+  };
+}
 function mConteo(pt = S.puntos[0]?.id) {
   const lista = S.productos.filter(x => x.activo);
   const ov = modal(`<h3>Conteo físico</h3>
     <p class="small muted" style="margin-top:-6px">Cuenta lo que hay de verdad y escríbelo. Si no coincide, el inventario se corrige y la diferencia queda registrada como faltante o sobrante.</p>
-    <div style="margin-bottom:10px">${puntoChips(pt, 'conteoPt', false)}</div>
+    <div style="margin-bottom:10px">${puntoChips(pt, 'conteoPt', false, S.puntos)}</div>
     <form id="fCo"><div class="scrollx"><table class="t"><thead><tr><th>Producto</th><th class="r">Sistema</th><th class="r" style="width:110px">Real</th></tr></thead><tbody>
     ${lista.map(x => `<tr><td>${esc(x.nombre)}</td><td class="r num">${stk(pt, x.id)}</td><td class="r"><input class="i num" style="padding:6px 8px;text-align:right" inputmode="numeric" name="p${x.id}" data-sis="${stk(pt, x.id)}" placeholder="${stk(pt, x.id)}"></td></tr>`).join('')}
     </tbody></table></div>
@@ -884,7 +938,7 @@ function textoLiquidacion() {
   return `*${CONFIG.NOMBRE}*\nVentas ${p ? nombrePunto(p) : 'todos los puntos'}\n${rangoTxt()}\n\n${lin.join('\n')}\n\n*TOTAL VENDIDO: ${$$(tv)}* (${V.length} ventas)${sal}`;
 }
 function mLiquidar() {
-  const pts = S.fPunto ? S.puntos.filter(p => p.id === S.fPunto) : S.puntos;
+  const pts = S.fPunto ? pVenta().filter(p => p.id === S.fPunto) : pVenta();
   const {a, b} = rango();
   const ov = modal(`<h3>Liquidar ventas</h3><p class="small muted" style="margin-top:-6px">${rangoTxt()}</p>
     <form id="fLq" class="row" style="gap:12px">
@@ -909,7 +963,7 @@ function mLiquidar() {
 }
 
 function mSalida() {
-  const pts = S.dueno ? S.puntos : S.puntos.filter(p => p.id === S.perfil.punto_id);
+  const pts = S.dueno ? pVenta() : S.puntos.filter(p => p.id === S.perfil.punto_id);
   const ov = modal(`<h3>Saqué plata de la caja</h3>
     <p class="small muted" style="margin-top:-6px">Plata que se cogió de lo vendido. Se descuenta de lo que hay que entregar.</p>
     <form id="fSal" class="row" style="gap:12px">
@@ -960,7 +1014,7 @@ function vCompras() {
             <label class="f">Nombre del producto<input class="i" name="nnombre" placeholder="Ej: Coca-Cola 400 ml"></label>
             <label class="f">Categoría<input class="i" name="ncat" list="dlCat2" placeholder="Gaseosas"><datalist id="dlCat2">${catOptions()}</datalist></label>
           </div>
-          <label class="f">¿A qué punto llega?<select class="i" name="pt">${S.puntos.map(p => `<option value="${p.id}" ${p.id===(sel?sel.punto_id:S.pv)?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></label>
+          <label class="f">¿A dónde llega?<select class="i" name="pt">${S.puntos.map(p => `<option value="${p.id}" ${p.id===(sel?sel.punto_id:(bodega()?.id ?? S.pv))?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></label>
           <label class="f">Fecha<input class="i" type="date" name="fecha" value="${ymd(sel ? sel.fecha : new Date())}"></label>
           <label class="f">Paquetes<input class="i num" name="paq" inputmode="numeric" value="1" required></label>
           <label class="f">Unidades por paquete<input class="i num" name="upp" inputmode="numeric" placeholder="12" required></label>
@@ -1054,7 +1108,7 @@ function vGastos() {
         <label class="f">¿Cuándo?<input class="i" type="date" name="fecha" value="${ymd(new Date())}"></label>
         <label class="f">¿Cómo se pagó?<select class="i" name="metodo">${METODOS.map(m => `<option>${m}</option>`).join('')}</select></label>
         <label class="f">¿De dónde salió la plata?<select class="i" name="pagado"><option value="base">De la base</option><option value="ventas">De lo vendido</option></select></label>
-        <label class="f">Punto<select class="i" name="pt"><option value="">General (todo el negocio)</option>${S.puntos.map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></label>
+        <label class="f">Punto<select class="i" name="pt"><option value="">General (todo el negocio)</option>${pVenta().map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></label>
         <label class="f" style="flex-basis:100%">Nota<input class="i" name="nota" placeholder="A quién se le pagó, # de recibo… (opcional)"></label>
         <button class="btn big" style="flex-basis:100%">Guardar gasto</button>
       </form>
@@ -1182,6 +1236,8 @@ document.addEventListener('click', async e => {
     case 'editProd': mProducto(+v); break;
     case 'traslado': mTraslado(+v); break;
     case 'conteo': mConteo(); break;
+    case 'enviar': mEnviar(); break;
+    case 'enviarPt': mEnviar(+v); break;
     case 'conteoPt': mConteo(+v); break;
     case 'sug': { const f = $('#fCompra'); f.pventa.value = v; f.pventa.dispatchEvent(new Event('input')); break; }
     case 'anular':
