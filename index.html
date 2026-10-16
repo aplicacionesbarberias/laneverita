@@ -746,7 +746,7 @@ function vVender() {
     ${S.dueno ? puntoChips(pv, 'pv', false) : ''}
   </div>
   ${activos.length ? Object.entries(grupos).map(([c, arr]) => `${Object.keys(grupos).length > 1 ? `<div class="cat-t">${esc(c)}</div>` : ''}<div class="pgrid">${arr.map(tile).join('')}</div>`).join('')
-    : `<div class="card empty">Todavía no hay productos. ${S.dueno ? 'Créalos en Compras o Inventario.' : 'El dueño debe cargarlos.'}</div>`}
+    : `<div class="card empty">Todavía no hay productos. ${S.dueno ? 'Regístralos en Compras.' : 'El dueño debe cargarlos.'}</div>`}
   <div class="pos-pad"></div>
   ${items.length ? `<div class="cartbar"><div class="in">
     <div class="tot"><small>${nU} ${nU === 1 ? 'producto' : 'productos'}</small><b class="num">${$$(total)}</b></div>
@@ -806,8 +806,7 @@ function vInventario() {
   return `<div class="row between" style="margin-bottom:12px"><h2 style="margin:0">Inventario</h2>
     <div class="row">${buscador}
       ${bodega() ? `<button class="btn ice sm" data-a="enviar">${ic('truck')}Enviar a cancha</button>` : ''}
-      <button class="btn ghost sm" data-a="conteo">${ic('check')}Conteo físico</button>
-      <button class="btn sm" data-a="nuevoProd">${ic('plus')}Producto</button></div></div>
+      <button class="btn ghost sm" data-a="conteo">${ic('check')}Conteo físico</button></div></div>
   <div class="kpis">
     <div class="kpi k-caja"><div class="t">Unidades en inventario</div><div class="v num">${fmtN.format(tu)}</div><div class="s">${datos.length} productos</div></div>
     <div class="kpi k-com"><div class="t">Vale al costo</div><div class="v num">${$$(tc)}</div><div class="s">Lo que te costó lo que hay</div></div>
@@ -819,7 +818,7 @@ function vInventario() {
     <label class="small muted chk"><input type="checkbox" id="invInact" ${S.invInact?'checked':''}> Ver inactivos</label></div>
     ${lista.length ? `<div class="scrollx only-d"><table class="t"><thead><tr><th>Producto</th>${S.puntos.map(p => `<th class="r">${esc(p.nombre)}</th>`).join('')}<th class="r">Total</th><th class="r">Vale al costo</th><th class="r">Vale a la venta</th><th></th></tr></thead>
     <tbody>${rows}</tbody><tfoot><tr><td>Total</td>${S.puntos.map(p => `<td class="r num">${fmtN.format(porLugar[p.id].u)}</td>`).join('')}<td class="r num">${fmtN.format(tu)} und</td><td class="r num">${$$(tc)}</td><td class="r num">${$$(tv)}</td><td></td></tr></tfoot></table></div>
-    <div class="only-m">${cards}</div>` : '<div class="empty">No hay productos. Crea uno o registra una compra.</div>'}
+    <div class="only-m">${cards}</div>` : '<div class="empty">No hay productos. Regístralos en Compras.</div>'}
   </div>`;
 }
 function catOptions() { return [...new Set(['Gaseosas','Cervezas','Mecato','Licores','Aguas y jugos','Dulces','Otros', ...S.productos.map(x => x.categoria)])].map(c => `<option value="${esc(c)}">`).join(''); }
