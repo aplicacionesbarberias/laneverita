@@ -179,6 +179,17 @@ table.t tfoot td{font-weight:700;border-top:2px solid var(--line)}
   .pos-pad{height:200px}
 }
 
+/* ---------- inputs pequeños de cantidad ---------- */
+input.qin{width:64px;min-width:64px;padding:7px 4px;text-align:center;font-size:16px;font-weight:600}
+.tenv td,.tenv th{padding:8px 5px}
+.tenv td:first-child{font-size:14px}
+.crow{border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:8px;display:flex;flex-direction:column;gap:8px}
+.cnuevo{display:flex;gap:8px}.cnuevo.hidden{display:none}
+.cnums{display:flex;gap:8px;align-items:flex-end}
+.cnums label{display:flex;flex-direction:column;font-size:12px;color:var(--muted);gap:3px}
+.cnums label:last-child{flex:1}
+.ctot2{margin-top:10px;font-size:15px}.ctot2 b{font-size:20px}
+
 /* ---------- inventario ---------- */
 .icard{border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px;display:flex;flex-direction:column;gap:10px}
 .icard b{font-size:15px}
@@ -876,18 +887,20 @@ function mTraslado(id) {
     } catch (er) { toast(errMsg(er), 'bad'); }
   };
 }
-function mEnviar(dest = pVenta()[0]?.id) {
+function mEnviar(dest = pVenta()[0]?.id, enviado = null) {
   const B = bodega(); if (!B) return;
-  const lista = S.productos.filter(x => x.activo && stk(B.id, x.id) > 0);
+  const lista = S.productos.filter(x => x.activo && (stk(B.id, x.id) > 0 || stk(dest, x.id) > 0))
+    .sort((a, b) => (stk(B.id, b.id) > 0) - (stk(B.id, a.id) > 0) || a.nombre.localeCompare(b.nombre));
   const ov = modal(`<h3>Enviar mercancía de la Bodega</h3>
-    <p class="small muted" style="margin-top:-6px">Escribe cuántas unidades mandas de cada producto. Sale de la bodega y entra al inventario de la cancha.</p>
+    <p class="small muted" style="margin-top:-6px">Escribe cuántas unidades mandas. Sale de la bodega y entra a la cancha.</p>
+    ${enviado ? `<div class="calc" style="grid-template-columns:1fr;margin-top:0;background:var(--ok-soft)"><div><small>Enviado a ${esc(nombrePunto(dest))}</small><b style="font-size:14px">${enviado.map(x => `${x.cantidad}× ${esc(prod(x.producto_id)?.nombre)}`).join(', ')}</b></div></div>` : ''}
     <div style="margin-bottom:10px">${puntoChips(dest, 'enviarPt', false)}</div>
-    ${lista.length ? `<form id="fEnv"><div class="scrollx"><table class="t"><thead><tr><th>Producto</th><th class="r">En bodega</th><th class="r">En la cancha</th><th class="r" style="width:110px">Enviar</th></tr></thead><tbody>
-    ${lista.map(x => `<tr><td>${esc(x.nombre)}</td><td class="r num">${stk(B.id, x.id)}</td><td class="r num">${stk(dest, x.id)}</td>
-      <td class="r"><input class="i num" style="padding:6px 8px;text-align:right" inputmode="numeric" name="p${x.id}" data-max="${stk(B.id, x.id)}" placeholder="0"></td></tr>`).join('')}
-    </tbody></table></div>
-    <div class="acts"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn ice">Enviar a ${esc(nombrePunto(dest))}</button></div></form>`
-    : '<div class="empty">La bodega está vacía. Registra una compra que llegue a la Bodega.</div><div class="acts"><button class="btn line" data-a="close">Cerrar</button></div>'}`, 'wide');
+    ${lista.length ? `<form id="fEnv"><table class="t tenv"><thead><tr><th>Producto</th><th class="r">Bodega</th><th class="r">Cancha</th><th class="r">Enviar</th></tr></thead><tbody>
+    ${lista.map(x => { const b = stk(B.id, x.id); return `<tr style="${b ? '' : 'opacity:.55'}"><td>${esc(x.nombre)}</td><td class="r num"><b>${b}</b></td><td class="r num"><b>${stk(dest, x.id)}</b></td>
+      <td class="r">${b ? `<input class="i num qin" inputmode="numeric" name="p${x.id}" data-max="${b}" placeholder="0">` : '<span class="small muted">—</span>'}</td></tr>`; }).join('')}
+    </tbody></table>
+    <div class="acts"><button type="button" class="btn line" data-a="close">${enviado ? 'Listo' : 'Cancelar'}</button><button class="btn ice">Enviar a ${esc(nombrePunto(dest))}</button></div></form>`
+    : '<div class="empty">No hay nada en la bodega ni en esta cancha. Registra una compra que llegue a la Bodega.</div><div class="acts"><button class="btn line" data-a="close">Cerrar</button></div>'}`, 'wide');
   const f = ov.querySelector('#fEnv'); if (!f) return;
   f.onsubmit = async e => {
     e.preventDefault(); const items = []; let mal = null;
@@ -896,7 +909,9 @@ function mEnviar(dest = pVenta()[0]?.id) {
     if (!items.length) return toast('Escribe al menos una cantidad', 'bad');
     const btn = f.querySelector('.acts .btn:last-child'); btn.disabled = true; btn.textContent = 'Enviando…';
     try { await rpc('enviar_mercancia', {p_de:B.id, p_a:dest, p_items:items});
-      closeModal(); toast(`Enviado a ${nombrePunto(dest)}: ${sum(items, x => x.cantidad)} unidades`, 'ok'); recargar({periodo:false});
+      items.forEach(x => { S.stock[B.id + '-' + x.producto_id] = stk(B.id, x.producto_id) - x.cantidad; S.stock[dest + '-' + x.producto_id] = stk(dest, x.producto_id) + x.cantidad; });
+      toast(`Enviado a ${nombrePunto(dest)}: ${sum(items, x => x.cantidad)} unidades`, 'ok');
+      render(); mEnviar(dest, items); recargar({periodo:false, silencioso:true});
     } catch (er) { toast(errMsg(er), 'bad'); btn.disabled = false; btn.textContent = 'Enviar'; }
   };
 }
@@ -905,8 +920,8 @@ function mConteo(pt = S.puntos[0]?.id) {
   const ov = modal(`<h3>Conteo físico</h3>
     <p class="small muted" style="margin-top:-6px">Cuenta lo que hay de verdad y escríbelo. Si no coincide, el inventario se corrige y la diferencia queda registrada como faltante o sobrante.</p>
     <div style="margin-bottom:10px">${puntoChips(pt, 'conteoPt', false, S.puntos)}</div>
-    <form id="fCo"><div class="scrollx"><table class="t"><thead><tr><th>Producto</th><th class="r">Sistema</th><th class="r" style="width:110px">Real</th></tr></thead><tbody>
-    ${lista.map(x => `<tr><td>${esc(x.nombre)}</td><td class="r num">${stk(pt, x.id)}</td><td class="r"><input class="i num" style="padding:6px 8px;text-align:right" inputmode="numeric" name="p${x.id}" data-sis="${stk(pt, x.id)}" placeholder="${stk(pt, x.id)}"></td></tr>`).join('')}
+    <form id="fCo"><div class="scrollx"><table class="t"><thead><tr><th>Producto</th><th class="r">Sistema</th><th class="r">Real</th></tr></thead><tbody>
+    ${lista.map(x => `<tr><td>${esc(x.nombre)}</td><td class="r num">${stk(pt, x.id)}</td><td class="r"><input class="i num qin" inputmode="numeric" name="p${x.id}" data-sis="${stk(pt, x.id)}" placeholder="${stk(pt, x.id)}"></td></tr>`).join('')}
     </tbody></table></div>
     <div class="acts"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn">Guardar conteo</button></div></form>`, 'wide');
   ov.querySelector('#fCo').onsubmit = async e => {
@@ -1032,6 +1047,12 @@ function mLiquidar() {
 
 function mSalida() {
   const pts = S.dueno ? pVenta() : S.puntos.filter(p => p.id === S.perfil.punto_id);
+  const opts = S.productos.filter(x => x.activo).sort((a, b) => a.nombre.localeCompare(b.nombre)).map(x => `<option value="${x.id}">${esc(x.nombre)}</option>`).join('');
+  const fila = () => `<div class="crow">
+      <select class="i" data-k="prod"><option value="">— Producto —</option>${opts}<option value="nuevo">➕ Producto nuevo…</option></select>
+      <div class="cnuevo hidden"><input class="i" data-k="nombre" placeholder="Nombre del producto"><input class="i num" data-k="pventa" inputmode="numeric" placeholder="Precio de venta c/u"></div>
+      <div class="cnums"><label>Paquetes<input class="i num qin" data-k="paq" inputmode="numeric" value="1"></label><label>Und x paq<input class="i num qin" data-k="upp" inputmode="numeric" placeholder="12"></label><label>Precio paquete<input class="i num" data-k="pp" inputmode="numeric" placeholder="$0"></label></div>
+      <div class="small muted" data-k="calc"></div></div>`;
   const ov = modal(`<h3>Saqué plata de la caja</h3>
     <p class="small muted" style="margin-top:-6px">Plata que se cogió de lo vendido. Se descuenta de lo que hay que entregar.</p>
     <form id="fSal" class="row" style="gap:12px">
@@ -1040,22 +1061,54 @@ function mSalida() {
         <label class="chip"><input type="radio" name="tipo" value="gasto" hidden>Pagar un gasto</label>
         <label class="chip"><input type="radio" name="tipo" value="otro" hidden>Otro</label>
       </div>
-      <div class="small muted" id="salAyuda" style="flex-basis:100%"></div>
       ${pts.length > 1 ? `<label class="f">Punto<select class="i" name="pt">${pts.map(p => `<option value="${p.id}" ${p.id===S.pv?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></label>` : `<input type="hidden" name="pt" value="${pts[0]?.id}">`}
-      <label class="f" id="salCat" style="display:none">Tipo de gasto<select class="i" name="cat">${CATS_GASTO.map(c => `<option ${c==='Otros'?'selected':''}>${c}</option>`).join('')}</select></label>
-      <label class="f">Valor<input class="i num" name="monto" inputmode="numeric" required placeholder="$50.000"></label>
-      <label class="f" style="flex-basis:100%">¿En qué se usó?<input class="i" name="concepto" required placeholder="Ej: 2 paquetes de Pony y 1 de papas"></label>
+      <div id="salCompra" style="flex-basis:100%">
+        <div class="small muted" style="margin-bottom:8px">Escribe lo que compraste con esa plata. Entra de una vez al inventario de la cancha y se descuenta de lo que hay que entregar.</div>
+        <div id="crows">${fila()}</div>
+        <button type="button" class="btn sm ghost" id="addRow">${ic('plus')}Otro producto</button>
+        <div class="ctot2">Total sacado de la caja: <b class="num" id="salTot">$0</b></div>
+      </div>
+      <div id="salOtro" class="row" style="gap:12px;flex-basis:100%">
+        <div class="small muted" id="salAyuda" style="flex-basis:100%"></div>
+        <label class="f" id="salCat">Tipo de gasto<select class="i" name="cat">${CATS_GASTO.map(c => `<option ${c==='Otros'?'selected':''}>${c}</option>`).join('')}</select></label>
+        <label class="f">Valor<input class="i num" name="monto" inputmode="numeric" placeholder="$50.000"></label>
+        <label class="f" style="flex-basis:100%">¿En qué se usó?<input class="i" name="concepto" placeholder="Ej: bolsa de hielo"></label>
+      </div>
       <div class="acts" style="flex-basis:100%"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn">Guardar</button></div>
-    </form>`);
+    </form>`, 'wide');
   const f = ov.querySelector('#fSal');
-  const AY = {compra:'El dueño luego registra los productos que llegaron para que entren al inventario.', gasto:'Queda guardado como gasto de una vez (hielo, bolsas, transporte…).', otro:'Plata que se sacó para otra cosa (no es compra ni gasto del negocio).'};
-  const upd = () => { f.querySelectorAll('label.chip').forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); ov.querySelector('#salCat').style.display = f.tipo.value === 'gasto' ? '' : 'none'; ov.querySelector('#salAyuda').textContent = AY[f.tipo.value]; };
+  const AY = {gasto:'Queda guardado como gasto de una vez (hielo, bolsas, transporte…).', otro:'Plata que se sacó para otra cosa (no es compra ni gasto del negocio).'};
+  const filas = () => [...ov.querySelectorAll('.crow')];
+  const val = (r, k) => r.querySelector(`[data-k=${k}]`).value;
+  const calcular = () => { let t = 0; filas().forEach(r => { const paq = num(val(r,'paq')), upp = num(val(r,'upp')), pp = num(val(r,'pp')); t += paq * pp;
+      r.querySelector('.cnuevo').classList.toggle('hidden', val(r,'prod') !== 'nuevo');
+      r.querySelector('[data-k=calc]').innerHTML = paq && upp && pp ? `${fmtN.format(paq * upp)} unidades · ${$$(pp / upp)} c/u · ${$$(paq * pp)}` : ''; });
+    ov.querySelector('#salTot').textContent = $$(t); return t; };
+  ov.querySelector('#crows').addEventListener('input', calcular); ov.querySelector('#crows').addEventListener('change', calcular);
+  ov.querySelector('#addRow').onclick = () => { ov.querySelector('#crows').insertAdjacentHTML('beforeend', fila()); };
+  const upd = () => { f.querySelectorAll('label.chip').forEach(l => l.classList.toggle('on', l.querySelector('input').checked));
+    const c = f.tipo.value === 'compra'; ov.querySelector('#salCompra').style.display = c ? '' : 'none'; ov.querySelector('#salOtro').style.display = c ? 'none' : '';
+    ov.querySelector('#salCat').style.display = f.tipo.value === 'gasto' ? '' : 'none'; ov.querySelector('#salAyuda').textContent = AY[f.tipo.value] || ''; };
   f.querySelectorAll('input[name=tipo]').forEach(r => r.onchange = upd); upd();
   f.onsubmit = async e => {
-    e.preventDefault(); const btn = f.querySelector('.acts .btn:last-child'); btn.disabled = true;
+    e.preventDefault(); const btn = f.querySelector('.acts .btn:last-child');
     try {
-      await rpc('registrar_salida', {p_punto:+f.pt.value, p_tipo:f.tipo.value, p_concepto:f.concepto.value.trim(), p_monto:num(f.monto.value), p_categoria:f.tipo.value === 'gasto' ? f.cat.value : null});
-      closeModal(); toast('Salida registrada', 'ok'); recargar({catalogo:false});
+      if (f.tipo.value === 'compra') {
+        const items = filas().filter(r => val(r,'prod')).map(r => { const nuevo = val(r,'prod') === 'nuevo';
+          return { producto_id: nuevo ? null : +val(r,'prod'), nombre: nuevo ? val(r,'nombre').trim() : null, precio_venta: nuevo ? num(val(r,'pventa')) : null,
+                   paquetes: Math.round(num(val(r,'paq'))), unidades_paquete: Math.round(num(val(r,'upp'))), precio_paquete: num(val(r,'pp')) }; });
+        if (!items.length) return toast('Elige el producto que compraste', 'bad');
+        if (items.some(x => !x.paquetes || !x.unidades_paquete || !x.precio_paquete)) return toast('Llena paquetes, unidades y precio de cada producto', 'bad');
+        if (items.some(x => x.producto_id === null && (!x.nombre || !x.precio_venta))) return toast('Al producto nuevo ponle nombre y precio de venta', 'bad');
+        btn.disabled = true;
+        await rpc('registrar_compra_caja', {p_punto:+f.pt.value, p_items:items});
+        closeModal(); toast(`Compra guardada · ${$$(calcular())} · ya está en el inventario`, 'ok'); recargar();
+      } else {
+        if (!num(f.monto.value) || !f.concepto.value.trim()) return toast('Escribe el valor y en qué se usó', 'bad');
+        btn.disabled = true;
+        await rpc('registrar_salida', {p_punto:+f.pt.value, p_tipo:f.tipo.value, p_concepto:f.concepto.value.trim(), p_monto:num(f.monto.value), p_categoria:f.tipo.value === 'gasto' ? f.cat.value : null});
+        closeModal(); toast('Salida registrada', 'ok'); recargar({catalogo:false});
+      }
     } catch (er) { toast(errMsg(er), 'bad'); btn.disabled = false; }
   };
 }
@@ -1369,7 +1422,7 @@ function avisoInstalar() {
 }
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); eventoInstalar = e; avisoInstalar(); });
 window.addEventListener('appinstalled', () => { $('#instalar')?.remove(); toast('App instalada', 'ok'); });
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js', {scope: './'}).catch(() => {});
 setTimeout(avisoInstalar, 1500);
 
 iniciar();
