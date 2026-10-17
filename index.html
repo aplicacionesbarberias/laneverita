@@ -659,10 +659,43 @@ function calc(p = 0) {
 }
 function caja() {
   const t = S.tot || {};
-  const base = (+t.ingresos||0) - (+t.retiros||0);
-  const queda = base - (+t.compras||0) - (+t.gastos||0);
-  const ventasCaja = (+t.ventas||0) - (+t.salidas||0);
-  return { base, compras:+t.compras||0, gastos:+t.gastos||0, ventas:+t.ventas||0, salidas:+t.salidas||0, ventasCaja, queda, total: queda + ventasCaja, fiado:+t.fiado||0 };
+  const n = k => +t[k] || 0;
+  const plata = n('ingresos') - n('retiros'), inicial = n('inicial');
+  const base = plata + inicial;                       // todo lo que has metido: plata + mercancía con la que arrancaste
+  const compras = n('compras') + inicial;             // invertido en mercancía (con la base)
+  const queda = base - compras - n('gastos');         // plata de la base que todavía no se ha gastado
+  const ventasCaja = n('ventas') - n('salidas');
+  const total = queda + ventasCaja;                   // plata que debería haber
+  // lo que ha generado el negocio desde el inicio
+  const ganancia = n('ventas_total') - n('costo_vendido');
+  const utilidad = ganancia - n('gastos_total') - n('faltantes') + n('sobrantes');
+  const valor = total + n('inventario') + n('fiado');
+  return { plata, inicial, base, compras, gastos:n('gastos'), ventas:n('ventas'), salidas:n('salidas'), ventasCaja, queda, total, fiado:n('fiado'),
+           ventasT:n('ventas_total'), costoT:n('costo_vendido'), ganancia, gastosT:n('gastos_total'), faltantes:n('faltantes') - n('sobrantes'), utilidad,
+           inventario:n('inventario'), valor, crecio: valor - base };
+}
+function cuadroGenerado(K) {
+  return `<div class="grid2">
+    <div class="card"><h3>Lo que ha generado La Neverita <span class="small muted" style="font-weight:500">· desde el inicio</span></h3>
+      <table class="t"><tbody>
+        <tr><td>Ventas</td><td class="r num">${$$(K.ventasT)}</td></tr>
+        <tr><td class="muted">− Lo que costó lo vendido</td><td class="r num">${$$(K.costoT)}</td></tr>
+        <tr><td><b>= Ganancia</b></td><td class="r num pos"><b>${$$(K.ganancia)}</b></td></tr>
+        <tr><td class="muted">− Gastos (arriendo, hielo…)</td><td class="r num neg">${$$(K.gastosT)}</td></tr>
+        ${K.faltantes ? `<tr><td class="muted">− Faltantes de inventario</td><td class="r num neg">${$$(K.faltantes)}</td></tr>` : ''}
+      </tbody><tfoot><tr><td>= Lo que te ha dejado</td><td class="r num ${K.utilidad < 0 ? 'neg' : 'pos'}" style="font-size:18px">${$$(K.utilidad)}</td></tr></tfoot></table>
+      <p class="small muted" style="margin:8px 0 0">Reinvertir en compras no baja esto: la plata solo pasa a ser mercancía.</p>
+    </div>
+    <div class="card"><h3>Cómo está el negocio hoy</h3>
+      <table class="t"><tbody>
+        <tr><td>Plata en caja</td><td class="r num">${$$(K.total)}</td></tr>
+        <tr><td class="muted">+ Mercancía en inventario (al costo)</td><td class="r num">${$$(K.inventario)}</td></tr>
+        ${K.fiado ? `<tr><td class="muted">+ Fiado por cobrar</td><td class="r num">${$$(K.fiado)}</td></tr>` : ''}
+        <tr><td><b>= Lo que vale La Neverita</b></td><td class="r num"><b>${$$(K.valor)}</b></td></tr>
+        <tr><td class="muted">Lo que tú metiste (base)</td><td class="r num">${$$(K.base)}</td></tr>
+      </tbody><tfoot><tr><td>Ha crecido</td><td class="r num ${K.crecio < 0 ? 'neg' : 'pos'}" style="font-size:18px">${$$(K.crecio)}</td></tr></tfoot></table>
+    </div>
+  </div>`;
 }
 
 /* ---------- RESUMEN ---------- */
@@ -712,6 +745,7 @@ function vResumen() {
     <div class="kpi k-caja"><div class="t">Total en caja</div><div class="v num">${$$(K.total)}</div><div class="s">Base que queda + ventas cobradas (acumulado)</div></div>
     ${K.fiado ? `<div class="kpi k-com"><div class="t">Fiado por cobrar</div><div class="v num" style="color:var(--warn)">${$$(K.fiado)}</div><div class="s">Lo que te deben</div></div>` : ''}
   </div>
+  ${cuadroGenerado(K)}
   <div class="grid2">
     <div class="card"><h3>Ventas por ${S.per.tipo==='todo'||dias>31?'mes':'día'}</h3>${R.ventas ? chart : '<div class="empty">Aún no hay ventas en este periodo</div>'}</div>
     <div class="card"><h3>Por punto</h3>
@@ -1147,7 +1181,7 @@ function vCompras() {
         <div class="chips" id="cSug" style="margin:8px 0"></div>
         <div class="small" id="cGan" style="min-height:20px"></div>
         <label class="f" style="margin-top:8px">Nota<input class="i" name="nota" placeholder="Proveedor, factura… (opcional)"></label>
-        <label class="small chk" style="margin-top:10px;cursor:pointer"><input type="checkbox" name="inicial"> Es mercancía que ya tenía (inventario inicial: no cuenta como compra ni sale de la base)</label>
+        <label class="small chk" style="margin-top:10px;cursor:pointer"><input type="checkbox" name="inicial"> Es mercancía que ya tenía (se suma sola a la base como capital y no cuenta como compra de la semana)</label>
         <button class="btn big" style="margin-top:14px">Guardar compra</button>
       </form>
     </div>
@@ -1278,15 +1312,16 @@ function vBase() {
   <div class="hero">
     <div class="t">Te queda de la base</div>
     <div class="v num ${K.queda < 0 ? 'neg' : ''}">${$$(K.queda)}</div>
-    <div class="s num">Base ${$$(K.base)} − Compras ${$$(K.compras)} − Gastos ${$$(K.gastos)} pagados con la base · desde el inicio</div>
+    <div class="s num">Base ${$$(K.base)} − Invertido en mercancía ${$$(K.compras)} − Gastos ${$$(K.gastos)} pagados con la base · desde el inicio</div>
   </div>
   <div class="kpis">
-    <div class="kpi k-caja"><div class="t">Base registrada</div><div class="v num">${$$(K.base)}</div><div class="s">Capital que has metido</div></div>
-    <div class="kpi k-com"><div class="t">Invertido en compras</div><div class="v num">${$$(K.compras)}</div><div class="s">${pct(K.compras, K.base)}% de la base</div></div>
+    <div class="kpi k-caja"><div class="t">Base (lo que has metido)</div><div class="v num">${$$(K.base)}</div><div class="s">Plata ${$$(K.plata)}${K.inicial ? ' + mercancía con que arrancaste ' + $$(K.inicial) : ''}</div></div>
+    <div class="kpi k-com"><div class="t">Invertido en mercancía</div><div class="v num">${$$(K.compras)}</div><div class="s">${pct(K.compras, K.base)}% de la base</div></div>
     <div class="kpi k-gas"><div class="t">Gastos</div><div class="v num neg">${$$(K.gastos)}</div></div>
     <div class="kpi k-ventas"><div class="t">Ventas</div><div class="v num">${$$(K.ventas)}</div><div class="s">${K.salidas ? 'Menos ' + $$(K.salidas) + ' sacado de la caja = ' + $$(K.ventasCaja) : 'Plata que ha entrado'}</div></div>
     <div class="kpi k-gan"><div class="t">Total (queda + ventas en caja)</div><div class="v num">${$$(K.total)}</div><div class="s">Lo que debería haber en caja</div></div>
   </div>
+  ${cuadroGenerado(K)}
   <div class="grid2">
     <div class="card"><h3>Registrar movimiento de base</h3>
       <form id="fBase" class="row" style="gap:12px">
