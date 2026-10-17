@@ -731,7 +731,7 @@ function vResumen() {
       </tbody></table></div>` : '<div class="empty">Sin ventas todavía</div>'}
     </div>
     <div class="card"><h3>Por acabarse</h3>
-      ${bajos.length ? bajos.sort((x, y) => x[1] - y[1]).slice(0, 12).map(([pr, q]) => `<div class="li"><div class="m"><b>${esc(pr.nombre)}</b><span>${esc(pr.categoria)}</span></div><span class="tag ${q<=0?'bad':'warn'}">${q<=0?'Agotado':q+' und'}</span></div>`).join('') : '<div class="empty">Todo con buen inventario</div>'}
+      ${bajos.length ? bajos.sort((x, y) => x[1] - y[1]).slice(0, 12).map(([pr, q]) => `<div class="li"><div class="m"><b>${esc(pr.nombre)}</b></div><span class="tag ${q<=0?'bad':'warn'}">${q<=0?'Agotado':q+' und'}</span></div>`).join('') : '<div class="empty">Todo con buen inventario</div>'}
     </div>
   </div>`;
 }
@@ -739,8 +739,7 @@ function vResumen() {
 /* ---------- VENDER ---------- */
 function vVender() {
   const pv = S.pv;
-  const activos = S.productos.filter(x => x.activo).sort((a, b) => a.categoria.localeCompare(b.categoria) || a.nombre.localeCompare(b.nombre));
-  const grupos = {}; activos.forEach(x => (grupos[x.categoria] ||= []).push(x));
+  const activos = S.productos.filter(x => x.activo).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const items = Object.entries(S.carrito).filter(([, c]) => c > 0).map(([id, c]) => ({p: prod(+id), c})).filter(x => x.p);
   const total = sum(items, x => x.p.precio_venta * x.c), nU = sum(items, x => x.c);
   const rec = num(S.recibido);
@@ -759,7 +758,7 @@ function vVender() {
     <h2 style="margin:0">Vender ${S.dueno ? '' : `<span class="tag">${esc(nombrePunto(pv))}</span>`}</h2>
     ${S.dueno ? puntoChips(pv, 'pv', false) : ''}
   </div>
-  ${activos.length ? Object.entries(grupos).map(([c, arr]) => `${Object.keys(grupos).length > 1 ? `<div class="cat-t">${esc(c)}</div>` : ''}<div class="pgrid">${arr.map(tile).join('')}</div>`).join('')
+  ${activos.length ? `<div class="pgrid">${activos.map(tile).join('')}</div>`
     : `<div class="card empty">Todavía no hay productos. ${S.dueno ? 'Regístralos en Compras.' : 'El dueño debe cargarlos.'}</div>`}
   <div class="pos-pad"></div>
   ${items.length ? `<div class="cartbar"><div class="in">
@@ -797,13 +796,13 @@ async function cobrar(btn, cliente = null) {
 /* ---------- INVENTARIO ---------- */
 function vInventario() {
   const q = S.invBusq.toLowerCase();
-  const lista = S.productos.filter(x => (S.invInact || x.activo) && (!q || x.nombre.toLowerCase().includes(q) || x.categoria.toLowerCase().includes(q)));
+  const lista = S.productos.filter(x => (S.invInact || x.activo) && (!q || x.nombre.toLowerCase().includes(q)));
   const buscador = `<input class="i" id="invBusq" placeholder="Buscar…" value="${esc(S.invBusq)}" style="max-width:260px">`;
   if (!S.dueno) {
     const pv = S.perfil.punto_id;
     return `<div class="row between" style="margin-bottom:12px"><h2 style="margin:0">Inventario · ${esc(nombrePunto(pv))}</h2>${buscador}</div>
     <div class="card">${lista.length ? `<table class="t"><thead><tr><th>Producto</th><th class="r">Precio</th><th class="r">Quedan</th></tr></thead><tbody>
-      ${lista.map(x => { const s = stk(pv, x.id); return `<tr><td><b>${esc(x.nombre)}</b><br><span class="small muted">${esc(x.categoria)}</span></td><td class="r num">${$$(x.precio_venta)}</td>
+      ${lista.map(x => { const s = stk(pv, x.id); return `<tr><td><b>${esc(x.nombre)}</b></td><td class="r num">${$$(x.precio_venta)}</td>
       <td class="r"><span class="tag ${s<=0?'bad':(x.stock_minimo&&s<=x.stock_minimo?'warn':'ok')}">${s}</span></td></tr>`; }).join('')}
       </tbody></table>` : '<div class="empty">Sin productos</div>'}</div>`;
   }
@@ -818,13 +817,13 @@ function vInventario() {
   });
   const acc = id => `<button class="ibtn" data-a="editProd" data-v="${id}" title="Editar">${ic('edit')}</button><button class="ibtn" data-a="traslado" data-v="${id}" title="Pasar a otro lugar">${ic('swap')}</button>`;
   const rows = datos.map(({x, tot, c, low}) => `<tr style="${x.activo?'':'opacity:.5'}">
-      <td><b>${esc(x.nombre)}</b><br><span class="small muted">${esc(x.categoria)} · cuesta ${$$(c)} · vende ${$$(x.precio_venta)}${c ? ' · ' + pct(x.precio_venta - c, x.precio_venta) + '%' : ''}${x.activo?'':' · inactivo'}</span></td>
+      <td><b>${esc(x.nombre)}</b><br><span class="small muted">cuesta ${$$(c)} · vende ${$$(x.precio_venta)}${c ? ' · ' + pct(x.precio_venta - c, x.precio_venta) + '%' : ''}${x.activo?'':' · inactivo'}</span></td>
       ${S.puntos.map(p => `<td class="r num">${stk(p.id, x.id)}</td>`).join('')}
       <td class="r"><span class="tag ${low}" style="font-size:13px">${tot} und</span></td>
       <td class="r num">${$$(tot * c)}</td><td class="r num"><b>${$$(tot * x.precio_venta)}</b></td>
       <td class="r" style="white-space:nowrap">${acc(x.id)}</td></tr>`).join('');
   const cards = datos.map(({x, tot, c, low}) => `<div class="icard" style="${x.activo?'':'opacity:.5'}">
-      <div class="row between" style="flex-wrap:nowrap;align-items:flex-start"><div style="min-width:0"><b>${esc(x.nombre)}</b><div class="small muted">${esc(x.categoria)} · vende ${$$(x.precio_venta)}</div></div>
+      <div class="row between" style="flex-wrap:nowrap;align-items:flex-start"><div style="min-width:0"><b>${esc(x.nombre)}</b><div class="small muted">vende ${$$(x.precio_venta)}</div></div>
         <span class="tag ${low}" style="font-size:15px;padding:4px 10px">${tot} und</span></div>
       <div class="lug">${S.puntos.map(p => `<span><small>${esc(p.nombre)}</small><b class="num">${stk(p.id, x.id)}</b></span>`).join('')}</div>
       <div class="row between small"><span class="muted">Al costo <b class="num" style="color:var(--ink)">${$$(tot * c)}</b></span><span class="muted">A la venta <b class="num" style="color:var(--ink)">${$$(tot * x.precio_venta)}</b></span><span>${acc(x.id)}</span></div>
@@ -853,7 +852,6 @@ function mProducto(id) {
   const ov = modal(`<h3>${id ? 'Editar producto' : 'Nuevo producto'}</h3>
     <form id="fProd" class="row" style="gap:12px">
       <label class="f" style="flex-basis:100%">Nombre<input class="i" name="nombre" required value="${esc(x.nombre)}" placeholder="Ej: Coca-Cola 400 ml"></label>
-      <label class="f">Categoría<input class="i" name="categoria" list="dlCat" value="${esc(x.categoria)}" placeholder="Gaseosas"><datalist id="dlCat">${catOptions()}</datalist></label>
       <label class="f">Precio de venta<input class="i num" name="precio" inputmode="numeric" required value="${x.precio_venta ? Math.round(x.precio_venta) : ''}"></label>
       <label class="f">Avisar cuando queden<input class="i num" name="min" inputmode="numeric" value="${x.stock_minimo || ''}" placeholder="0"></label>
       ${id ? `<label class="small chk" style="flex-basis:100%;cursor:pointer"><input type="checkbox" name="activo" ${x.activo?'checked':''}> Activo (aparece para vender)</label>` : ''}
@@ -862,7 +860,7 @@ function mProducto(id) {
     </form>`);
   ov.querySelector('#fProd').onsubmit = async e => {
     e.preventDefault(); const f = e.target;
-    const row = { nombre:f.nombre.value.trim(), categoria:f.categoria.value.trim() || 'General', precio_venta:num(f.precio.value), stock_minimo:Math.round(num(f.min.value)) };
+    const row = { nombre:f.nombre.value.trim(), precio_venta:num(f.precio.value), stock_minimo:Math.round(num(f.min.value)) };
     if (id) row.activo = f.activo.checked;
     try {
       const r = id ? await sb.from('productos').update(row).eq('id', id) : await sb.from('productos').insert(row);
@@ -1133,7 +1131,6 @@ function vCompras() {
           <label class="f" style="flex-basis:100%">Producto<select class="i" name="prod" id="cProd"><option value="">— Elige —</option>${opts}<option value="nuevo">➕ Producto nuevo…</option></select></label>
           <div id="cNuevo" class="row hidden" style="gap:12px;flex-basis:100%">
             <label class="f">Nombre del producto<input class="i" name="nnombre" placeholder="Ej: Coca-Cola 400 ml"></label>
-            <label class="f">Categoría<input class="i" name="ncat" list="dlCat2" placeholder="Gaseosas"><datalist id="dlCat2">${catOptions()}</datalist></label>
           </div>
           <label class="f">¿A dónde llega?<select class="i" name="pt">${S.puntos.map(p => `<option value="${p.id}" ${p.id===(sel?sel.punto_id:(bodega()?.id ?? S.pv))?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></label>
           <label class="f">Fecha<input class="i" type="date" name="fecha" value="${ymd(sel ? sel.fecha : new Date())}"></label>
@@ -1187,7 +1184,7 @@ function initCompras() {
     try {
       if (pid === 'nuevo') {
         if (!f.nnombre.value.trim()) throw new Error('Escribe el nombre del producto nuevo');
-        const r = await sb.from('productos').insert({nombre:f.nnombre.value.trim(), categoria:f.ncat.value.trim() || 'General', precio_venta:num(f.pventa.value)}).select().single();
+        const r = await sb.from('productos').insert({nombre:f.nnombre.value.trim(), precio_venta:num(f.pventa.value)}).select().single();
         if (r.error) throw r.error; pid = r.data.id;
       }
       const hoy = ymd(new Date());
