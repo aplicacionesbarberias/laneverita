@@ -190,6 +190,21 @@ input.qin{width:64px;min-width:64px;padding:7px 4px;text-align:center;font-size:
 .cnums label:last-child{flex:1}
 .ctot2{margin-top:10px;font-size:15px}.ctot2 b{font-size:20px}
 
+/* ---------- colores por lugar ---------- */
+.pc-b{--pc:#b45309;--pcs:#fef3c7}   /* Bodega: ámbar */
+.pc-1{--pc:#15803d;--pcs:#dcfce7}   /* Cancha Agrícola: verde */
+.pc-2{--pc:#7e22ce;--pcs:#f3e8ff}   /* Cancha Unidad Deportiva: morado */
+.pc-x{--pc:#475569;--pcs:#f1f5f9}
+.lug span[class^=pc-]{background:var(--pcs);border-left:4px solid var(--pc)}
+.lug span[class^=pc-] small{color:var(--pc);font-weight:700}
+.lug span[class^=pc-] b{color:var(--pc)}
+th.hd{color:var(--pc)!important}
+td.cell{background:var(--pcs);color:var(--pc);font-weight:700}
+.kpi.kl{border-left-color:var(--pc);background:linear-gradient(180deg,var(--pcs),#fff 70%)}
+.kpi.kl .t{color:var(--pc)}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--pc)}
+.tag.tp{background:var(--pcs);color:var(--pc)}
+
 /* ---------- inventario ---------- */
 .icard{border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px;display:flex;flex-direction:column;gap:10px}
 .icard b{font-size:15px}
@@ -387,6 +402,7 @@ const S = {
 const nombrePunto = id => S.puntos.find(p => p.id === id)?.nombre || (id ? 'Punto ' + id : 'General');
 const prod = id => S.productos.find(p => p.id === id);
 const stk = (pt, pid) => S.stock[pt + '-' + pid] || 0;
+const pc = id => { const p = S.puntos.find(x => x.id === id); return p?.bodega ? 'pc-b' : id === 1 ? 'pc-1' : id === 2 ? 'pc-2' : 'pc-x'; };
 const pVenta = () => S.puntos.filter(p => !p.bodega);
 const bodega = () => S.puntos.find(p => p.bodega);
 const stkTotal = pid => S.puntos.reduce((a, p) => a + stk(p.id, pid), 0);
@@ -789,7 +805,7 @@ function vVender() {
   };
   return `
   <div class="row between" style="margin-bottom:12px">
-    <h2 style="margin:0">Vender ${S.dueno ? '' : `<span class="tag">${esc(nombrePunto(pv))}</span>`}</h2>
+    <h2 style="margin:0">Vender ${S.dueno ? '' : `<span class="tag ${pc(pv)} tp">${esc(nombrePunto(pv))}</span>`}</h2>
     ${S.dueno ? puntoChips(pv, 'pv', false) : ''}
   </div>
   ${activos.length ? `<div class="pgrid">${activos.map(tile).join('')}</div>`
@@ -852,14 +868,14 @@ function vInventario() {
   const acc = id => `<button class="ibtn" data-a="editProd" data-v="${id}" title="Editar">${ic('edit')}</button><button class="ibtn" data-a="traslado" data-v="${id}" title="Pasar a otro lugar">${ic('swap')}</button>`;
   const rows = datos.map(({x, tot, c, low}) => `<tr style="${x.activo?'':'opacity:.5'}">
       <td><b>${esc(x.nombre)}</b><br><span class="small muted">cuesta ${$$(c)} · vende ${$$(x.precio_venta)}${c ? ' · ' + pct(x.precio_venta - c, x.precio_venta) + '%' : ''}${x.activo?'':' · inactivo'}</span></td>
-      ${S.puntos.map(p => `<td class="r num">${stk(p.id, x.id)}</td>`).join('')}
+      ${S.puntos.map(p => `<td class="r num ${pc(p.id)} cell">${stk(p.id, x.id)}</td>`).join('')}
       <td class="r"><span class="tag ${low}" style="font-size:13px">${tot} und</span></td>
       <td class="r num">${$$(tot * c)}</td><td class="r num"><b>${$$(tot * x.precio_venta)}</b></td>
       <td class="r" style="white-space:nowrap">${acc(x.id)}</td></tr>`).join('');
   const cards = datos.map(({x, tot, c, low}) => `<div class="icard" style="${x.activo?'':'opacity:.5'}">
       <div class="row between" style="flex-wrap:nowrap;align-items:flex-start"><div style="min-width:0"><b>${esc(x.nombre)}</b><div class="small muted">vende ${$$(x.precio_venta)}</div></div>
         <span class="tag ${low}" style="font-size:15px;padding:4px 10px">${tot} und</span></div>
-      <div class="lug">${S.puntos.map(p => `<span><small>${esc(p.nombre)}</small><b class="num">${stk(p.id, x.id)}</b></span>`).join('')}</div>
+      <div class="lug">${S.puntos.map(p => `<span class="${pc(p.id)}"><small>${esc(p.nombre)}</small><b class="num">${stk(p.id, x.id)}</b></span>`).join('')}</div>
       <div class="row between small"><span class="muted">Al costo <b class="num" style="color:var(--ink)">${$$(tot * c)}</b></span><span class="muted">A la venta <b class="num" style="color:var(--ink)">${$$(tot * x.precio_venta)}</b></span><span>${acc(x.id)}</span></div>
     </div>`).join('');
   return `<div class="row between" style="margin-bottom:12px"><h2 style="margin:0">Inventario</h2>
@@ -872,10 +888,10 @@ function vInventario() {
     <div class="kpi k-ventas"><div class="t">Vale a precio de venta</div><div class="v num">${$$(tv)}</div><div class="s">Si vendes todo</div></div>
     <div class="kpi k-gan"><div class="t">Ganancia por vender</div><div class="v num pos">${$$(tv - tc)}</div><div class="s">${pct(tv - tc, tv)}% de margen</div></div>
   </div>
-  <div class="kpis">${S.puntos.map(p => { const L = porLugar[p.id]; return `<div class="kpi"><div class="t">${esc(p.nombre)}</div><div class="v num">${fmtN.format(L.u)} und</div><div class="s">Al costo ${$$(L.c)} · a la venta ${$$(L.v)}</div></div>`; }).join('')}</div>
+  <div class="kpis">${S.puntos.map(p => { const L = porLugar[p.id]; return `<div class="kpi ${pc(p.id)} kl"><div class="t"><i class="dot"></i>${esc(p.nombre)}</div><div class="v num">${fmtN.format(L.u)} und</div><div class="s">Al costo ${$$(L.c)} · a la venta ${$$(L.v)}</div></div>`; }).join('')}</div>
   <div class="card"><div class="row between" style="margin-bottom:6px"><span class="small muted">Unidades por lugar y cuánto vale. Costo = promedio por unidad según tus compras.</span>
     <label class="small muted chk"><input type="checkbox" id="invInact" ${S.invInact?'checked':''}> Ver inactivos</label></div>
-    ${lista.length ? `<div class="scrollx only-d"><table class="t"><thead><tr><th>Producto</th>${S.puntos.map(p => `<th class="r">${esc(p.nombre)}</th>`).join('')}<th class="r">Total</th><th class="r">Vale al costo</th><th class="r">Vale a la venta</th><th></th></tr></thead>
+    ${lista.length ? `<div class="scrollx only-d"><table class="t"><thead><tr><th>Producto</th>${S.puntos.map(p => `<th class="r ${pc(p.id)} hd">${esc(p.nombre)}</th>`).join('')}<th class="r">Total</th><th class="r">Vale al costo</th><th class="r">Vale a la venta</th><th></th></tr></thead>
     <tbody>${rows}</tbody><tfoot><tr><td>Total</td>${S.puntos.map(p => `<td class="r num">${fmtN.format(porLugar[p.id].u)}</td>`).join('')}<td class="r num">${fmtN.format(tu)} und</td><td class="r num">${$$(tc)}</td><td class="r num">${$$(tv)}</td><td></td></tr></tfoot></table></div>
     <div class="only-m">${cards}</div>` : '<div class="empty">No hay productos. Regístralos en Compras.</div>'}
   </div>`;
@@ -927,8 +943,8 @@ function mEnviar(dest = pVenta()[0]?.id, enviado = null) {
     <p class="small muted" style="margin-top:-6px">Escribe cuántas unidades mandas. Sale de la bodega y entra a la cancha.</p>
     ${enviado ? `<div class="calc" style="grid-template-columns:1fr;margin-top:0;background:var(--ok-soft)"><div><small>Enviado a ${esc(nombrePunto(dest))}</small><b style="font-size:14px">${enviado.map(x => `${x.cantidad}× ${esc(prod(x.producto_id)?.nombre)}`).join(', ')}</b></div></div>` : ''}
     <div style="margin-bottom:10px">${puntoChips(dest, 'enviarPt', false)}</div>
-    ${lista.length ? `<form id="fEnv"><table class="t tenv"><thead><tr><th>Producto</th><th class="r">Bodega</th><th class="r">Cancha</th><th class="r">Enviar</th></tr></thead><tbody>
-    ${lista.map(x => { const b = stk(B.id, x.id); return `<tr style="${b ? '' : 'opacity:.55'}"><td>${esc(x.nombre)}</td><td class="r num"><b>${b}</b></td><td class="r num"><b>${stk(dest, x.id)}</b></td>
+    ${lista.length ? `<form id="fEnv"><table class="t tenv"><thead><tr><th>Producto</th><th class="r pc-b hd">Bodega</th><th class="r ${pc(dest)} hd">Cancha</th><th class="r">Enviar</th></tr></thead><tbody>
+    ${lista.map(x => { const b = stk(B.id, x.id); return `<tr style="${b ? '' : 'opacity:.55'}"><td>${esc(x.nombre)}</td><td class="r num pc-b cell"><b>${b}</b></td><td class="r num ${pc(dest)} cell"><b>${stk(dest, x.id)}</b></td>
       <td class="r">${b ? `<input class="i num qin" inputmode="numeric" name="p${x.id}" data-max="${b}" placeholder="0">` : '<span class="small muted">—</span>'}</td></tr>`; }).join('')}
     </tbody></table>
     <div class="acts"><button type="button" class="btn line" data-a="close">${enviado ? 'Listo' : 'Cancelar'}</button><button class="btn ice">Enviar a ${esc(nombrePunto(dest))}</button></div></form>`
@@ -981,7 +997,7 @@ function vVentas() {
   const TIPO = {compra:['Compra de mercancía',''], gasto:['Gasto','bad'], otro:['Otro','warn']};
   const L = liq(p);
   return `${periodoBar()}
-  <div class="row between" style="margin-bottom:12px"><h2 style="margin:0">Ventas ${S.dueno ? '' : `<span class="tag">${esc(nombrePunto(p))}</span>`}</h2>${S.dueno ? puntoChips(p, 'fpunto') : ''}</div>
+  <div class="row between" style="margin-bottom:12px"><h2 style="margin:0">Ventas ${S.dueno ? '' : `<span class="tag ${pc(p)} tp">${esc(nombrePunto(p))}</span>`}</h2>${S.dueno ? puntoChips(p, 'fpunto') : ''}</div>
   <div class="kpis">
     <div class="kpi k-ventas"><div class="t">Total vendido</div><div class="v num">${$$(total)}</div><div class="s">${rangoTxt()}</div></div>
     <div class="kpi k-gan"><div class="t">Ventas</div><div class="v num">${V.length}</div><div class="s">${unid} unidades</div></div>
