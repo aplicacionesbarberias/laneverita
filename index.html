@@ -670,7 +670,7 @@ function calc(p = 0) {
   const faltantes = sum(A, x => -x.diferencia * x.costo_unit);
   const ganancia = ventas - costoV;
   const utilidad = ganancia - gastos - faltantes;
-  const baseP = sum(S.base, b => b.tipo === 'ingreso' ? b.monto : -b.monto) - sum(S.salidas.filter(x => x.tipo === 'otro'), x => x.monto);
+  const baseP = sum(S.base, b => b.tipo === 'ingreso' ? +b.monto : b.tipo === 'retiro' ? -b.monto : 0) - sum(S.salidas.filter(x => x.tipo === 'otro'), x => x.monto);
   return { V, ventas, costoV, unid, ganancia, gastos, compras, faltantes, utilidad, baseP, porProd, porDia, porPunto, nVentas:V.length };
 }
 function caja() {
@@ -679,14 +679,15 @@ function caja() {
   const plata = n('ingresos') - n('retiros'), inicial = n('inicial');
   const base = plata + inicial;                       // todo lo que has metido: plata + mercancía con la que arrancaste
   const compras = n('compras') + inicial;             // invertido en mercancía (con la base)
-  const queda = base - compras - n('gastos');         // plata de la base que todavía no se ha gastado
-  const ventasCaja = n('ventas') - n('salidas');
+  const traido = n('traido');                         // plata de ventas pasada a la base para comprar
+  const queda = base + traido - compras - n('gastos'); // plata de la base que todavía no se ha gastado
+  const ventasCaja = n('ventas') - n('salidas') - traido;
   const total = queda + ventasCaja;                   // plata que debería haber
   // lo que ha generado el negocio desde el inicio
   const ganancia = n('ventas_total') - n('costo_vendido');
   const utilidad = ganancia - n('gastos_total') - n('faltantes') + n('sobrantes');
   const valor = total + n('inventario') + n('fiado');
-  return { plata, inicial, base, compras, gastos:n('gastos'), ventas:n('ventas'), salidas:n('salidas'), ventasCaja, queda, total, fiado:n('fiado'),
+  return { plata, inicial, base, traido, compras, gastos:n('gastos'), ventas:n('ventas'), salidas:n('salidas'), ventasCaja, queda, total, fiado:n('fiado'),
            ventasT:n('ventas_total'), costoT:n('costo_vendido'), ganancia, gastosT:n('gastos_total'), faltantes:n('faltantes') - n('sobrantes'), utilidad,
            inventario:n('inventario'), valor, crecio: valor - base };
 }
@@ -1328,20 +1329,21 @@ function vBase() {
   <div class="hero">
     <div class="t">Te queda de la base</div>
     <div class="v num ${K.queda < 0 ? 'neg' : ''}">${$$(K.queda)}</div>
-    <div class="s num">Base ${$$(K.base)} − Invertido en mercancía ${$$(K.compras)} − Gastos ${$$(K.gastos)} pagados con la base · desde el inicio</div>
+    <div class="s num">Base ${$$(K.base)}${K.traido ? ' + traído de las ventas ' + $$(K.traido) : ''} − Invertido en mercancía ${$$(K.compras)} − Gastos ${$$(K.gastos)} pagados con la base · desde el inicio</div>
   </div>
   <div class="kpis">
     <div class="kpi k-caja"><div class="t">Base (lo que has metido)</div><div class="v num">${$$(K.base)}</div><div class="s">Plata ${$$(K.plata)}${K.inicial ? ' + mercancía con que arrancaste ' + $$(K.inicial) : ''}</div></div>
     <div class="kpi k-com"><div class="t">Invertido en mercancía</div><div class="v num">${$$(K.compras)}</div><div class="s">${pct(K.compras, K.base)}% de la base</div></div>
     <div class="kpi k-gas"><div class="t">Gastos</div><div class="v num neg">${$$(K.gastos)}</div></div>
-    <div class="kpi k-ventas"><div class="t">Ventas</div><div class="v num">${$$(K.ventas)}</div><div class="s">${K.salidas ? 'Menos ' + $$(K.salidas) + ' sacado de la caja = ' + $$(K.ventasCaja) : 'Plata que ha entrado'}</div></div>
+    <div class="kpi k-ventas"><div class="t">Ventas</div><div class="v num">${$$(K.ventas)}</div><div class="s">${K.salidas || K.traido ? `Quedan en ventas ${$$(K.ventasCaja)}${K.traido ? ' (pasaste ' + $$(K.traido) + ' a la base)' : ''}` : 'Plata que ha entrado'}</div></div>
     <div class="kpi k-gan"><div class="t">Total (queda + ventas en caja)</div><div class="v num">${$$(K.total)}</div><div class="s">Lo que debería haber en caja</div></div>
   </div>
   ${cuadroGenerado(K)}
   <div class="grid2">
     <div class="card"><h3>Registrar movimiento de base</h3>
       <form id="fBase" class="row" style="gap:12px">
-        <div class="chips" style="flex-basis:100%"><label class="chip on" id="tIng"><input type="radio" name="tipo" value="ingreso" checked hidden>Meter base</label><label class="chip" id="tRet"><input type="radio" name="tipo" value="retiro" hidden>Sacar plata</label></div>
+        <div class="chips" style="flex-basis:100%"><label class="chip on"><input type="radio" name="tipo" value="ingreso" checked hidden>Meter base</label><label class="chip"><input type="radio" name="tipo" value="desde_ventas" hidden>Traer plata de las ventas</label><label class="chip"><input type="radio" name="tipo" value="retiro" hidden>Sacar plata</label></div>
+        <div class="small muted" id="bAyuda" style="flex-basis:100%"></div>
         <label class="f">Valor<input class="i num" name="monto" inputmode="numeric" required placeholder="$1.500.000"></label>
         <label class="f">Fecha<input class="i" type="date" name="fecha" value="${ymd(new Date())}"></label>
         <label class="f" style="flex-basis:100%">Nota<input class="i" name="nota" placeholder="Opcional"></label>
@@ -1350,15 +1352,20 @@ function vBase() {
       <div class="small muted" style="margin-top:14px">En este periodo (${rangoTxt()}): base ${$$(R.baseP)} · compras ${$$(R.compras)} · gastos ${$$(R.gastos)} · ventas ${$$(R.ventas)}</div>
     </div>
     <div class="card"><h3>Movimientos del periodo</h3>
-      ${B.length ? B.map(b => `<div class="li"><div class="m"><b>${b.tipo === 'ingreso' ? 'Base ingresada' : 'Retiro'}</b><span>${fFecha(b.fecha)}${b.nota ? ' · ' + esc(b.nota) : ''}</span></div><div class="a num ${b.tipo==='ingreso'?'pos':'neg'}">${b.tipo==='ingreso'?'+':'−'}${$$(b.monto)}</div><button class="ibtn" data-a="delBase" data-v="${b.id}">${ic('trash')}</button></div>`).join('') : '<div class="empty">Sin movimientos en este periodo</div>'}
+      ${B.length ? B.map(b => `<div class="li"><div class="m"><b>${b.tipo === 'ingreso' ? 'Base ingresada' : b.tipo === 'desde_ventas' ? 'Traído de las ventas' : 'Retiro'}</b><span>${fFecha(b.fecha)}${b.nota ? ' · ' + esc(b.nota) : ''}</span></div><div class="a num ${b.tipo==='retiro'?'neg':'pos'}">${b.tipo==='retiro'?'−':'+'}${$$(b.monto)}</div><button class="ibtn" data-a="delBase" data-v="${b.id}">${ic('trash')}</button></div>`).join('') : '<div class="empty">Sin movimientos en este periodo</div>'}
     </div>
   </div>`;
 }
 function initBase() {
   const f = $('#fBase'); if (!f) return;
-  f.querySelectorAll('input[name=tipo]').forEach(r => r.onchange = () => { $('#tIng').classList.toggle('on', f.tipo.value === 'ingreso'); $('#tRet').classList.toggle('on', f.tipo.value === 'retiro'); });
+  const AY = { ingreso:'Plata nueva que sale de tu bolsillo para el negocio (base, sencillo…).',
+    desde_ventas:'Pasa plata de lo vendido a la base para comprar. No cuenta como plata nueva tuya. Después registra la compra en Compras.',
+    retiro:'Plata que sacas del negocio para ti.' };
+  const upd = () => { f.querySelectorAll('label.chip').forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); $('#bAyuda').textContent = AY[f.tipo.value]; };
+  f.querySelectorAll('input[name=tipo]').forEach(r => r.onchange = upd); upd();
   f.onsubmit = async e => {
     e.preventDefault();
+    if (f.tipo.value === 'desde_ventas') { const K = caja(); if (num(f.monto.value) > K.ventasCaja && !await confirmar(`En ventas solo hay ${$$(K.ventasCaja)}. ¿Igual pasar ${$$(num(f.monto.value))}?`, 'Sí, pasar')) return; }
     const r = await sb.from('base_movs').insert({tipo:f.tipo.value, monto:num(f.monto.value), fecha:fechaISO(f.fecha.value), nota:f.nota.value.trim() || null});
     if (r.error) return toast(errMsg(r.error), 'bad');
     toast('Movimiento guardado', 'ok'); recargar({catalogo:false});
