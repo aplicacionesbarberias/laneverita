@@ -160,6 +160,8 @@ table.t tfoot td{font-weight:700;border-top:2px solid var(--line)}
 .prod.off{opacity:.45;cursor:not-allowed}
 .qrow{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:6px}
 .qrow b{font-size:22px;font-weight:800;color:var(--navy);min-width:30px;text-align:center}
+.qty-in{width:56px;min-width:0;flex:1;height:42px;border:2px solid var(--line);border-radius:12px;text-align:center;font-size:20px;font-weight:800;color:var(--navy);background:#fff;padding:0 2px}
+.qty-in:focus{outline:none;border-color:var(--ice)}
 .qb{width:46px;height:42px;border-radius:12px;border:0;font-size:24px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center}
 .qb.m{background:#e8eef4;color:var(--navy)}
 .qb.p{background:var(--ice);color:#fff}
@@ -801,7 +803,7 @@ function vVender() {
       <span class="nm">${esc(x.nombre)}</span>
       <span class="st ${low||s<=0?'low':''}">${s <= 0 ? 'Agotado' : 'Quedan ' + (s - enC)}</span>
       <span class="pr num">${$$(x.precio_venta)}</span>
-      ${enC ? `<div class="qrow"><button class="qb m" data-a="menos" data-v="${x.id}">−</button><b class="num">${enC}</b><button class="qb p" data-a="add" data-v="${x.id}">+</button></div>` : ''}
+      ${enC ? `<div class="qrow"><button class="qb m" data-a="menos" data-v="${x.id}">−</button><input class="qty-in num" type="text" inputmode="numeric" data-q="${x.id}" value="${enC}" aria-label="Cantidad"><button class="qb p" data-a="add" data-v="${x.id}">+</button></div>` : ''}
     </div>`;
   };
   return `
@@ -1220,11 +1222,22 @@ function initCompras() {
     $('#cGan').innerHTML = cu && pv ? (pv > cu ? `Ganas <b class="pos">${$$(pv - cu)}</b> por unidad (${pct(pv - cu, pv)}% del precio) · <b class="pos">${$$((pv - cu) * u)}</b> si vendes todo` : `<span class="neg">Ojo: vendes por debajo del costo</span>`) : '';
   };
   ['paq','upp','ppaq','pventa'].forEach(n => f[n].addEventListener('input', upd));
-  f.prod.onchange = () => {
+  f.prod.onchange = async () => {
     $('#cNuevo').classList.toggle('hidden', f.prod.value !== 'nuevo');
-    const x = prod(+f.prod.value); if (x && x.precio_venta) f.pventa.value = Math.round(x.precio_venta);
+    const id = +f.prod.value, x = prod(id); if (x && x.precio_venta) f.pventa.value = Math.round(x.precio_venta);
     if (f.prod.value === 'nuevo') f.nnombre.focus();
     upd();
+    // Recordar lo que valió el paquete la última vez que se compró este producto
+    if (x) {
+      S.ultCompra ||= {};
+      if (!S.ultCompra[id]) {
+        const r = await sb.from('compras').select('precio_paquete,unidades_paquete').eq('producto_id', id).order('fecha', {ascending:false}).limit(1);
+        if (!r.error && r.data?.[0]) S.ultCompra[id] = r.data[0];
+      }
+      const u = S.ultCompra[id];
+      if (u && +f.prod.value === id) { f.ppaq.value = Math.round(u.precio_paquete); f.upp.value = u.unidades_paquete; upd(); }
+      else if (+f.prod.value === id) { f.ppaq.value = ''; upd(); }
+    }
   };
   f.onsubmit = async e => {
     e.preventDefault(); const btn = f.querySelector('button.big');
@@ -1245,6 +1258,7 @@ function initCompras() {
         p_fecha: f.fecha.value === hoy ? new Date().toISOString() : new Date(parseYmd(f.fecha.value).setHours(12)).toISOString(),
         p_nota:f.nota.value.trim() || null, p_inicial:f.inicial.checked, p_salida:S.salidaSel
       });
+      (S.ultCompra ||= {})[+pid] = {precio_paquete:num(f.ppaq.value), unidades_paquete:Math.round(num(f.upp.value))};
       toast('Compra guardada y sumada al inventario', 'ok'); recargar();
     } catch (er) { toast(errMsg(er), 'bad'); btn.disabled = false; btn.textContent = 'Guardar compra'; }
   };
@@ -1388,7 +1402,18 @@ function afterRender() {
   initCompras(); initGastos(); initBase();
 }
 
+// Cantidad escrita a mano en el cuadrito de Vender
+function fijarCantidad(inp) {
+  const id = +inp.dataset.q, max = stk(S.pv, id); let c = Math.round(num(inp.value));
+  if (c > max) { c = max; toast(`Solo quedan ${max} de ${prod(id)?.nombre}`, 'bad'); }
+  if (c > 0) S.carrito[id] = c; else delete S.carrito[id];
+  render();
+}
+document.addEventListener('change', e => { if (e.target.matches('.qty-in')) fijarCantidad(e.target); });
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('.qty-in')) { e.preventDefault(); e.target.blur(); } });
+document.addEventListener('focusin', e => { if (e.target.matches('.qty-in')) e.target.select(); });
 document.addEventListener('click', async e => {
+  if (e.target.matches('.qty-in')) return;
   const el = e.target.closest('[data-a]'); if (!el) return;
   const a = el.dataset.a, v = el.dataset.v;
   switch (a) {
