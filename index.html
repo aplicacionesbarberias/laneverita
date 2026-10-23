@@ -765,7 +765,6 @@ function vResumen() {
 
   return `${periodoBar()}
   <div class="row between" style="margin-bottom:12px"><h2 style="margin:0">Resumen</h2>${puntoChips(p, 'fpunto')}</div>
-  ${(() => { const v = estadoFijos().filter(x => x.vencido || (!x.pago && x.faltan <= 3)); return v.length ? `<div class="card row between" style="background:var(--bad-soft);box-shadow:none"><span><b>Gastos fijos por pagar:</b> ${v.map(x => esc(x.f.concepto) + ' ' + $$(x.f.monto) + (x.vencido ? ' (vencido)' : '')).join(' · ')}</span><button class="btn sm" data-a="tab" data-v="gastos">Ver</button></div>` : ''; })()}
   ${(() => { const n = S.salidas.filter(x => x.tipo === 'compra' && x.estado === 'pendiente'); return n.length ? `<div class="card row between" style="background:var(--warn-soft);box-shadow:none"><span><b>${n.length} compra${n.length>1?'s':''} con plata de las ventas</b> (${$$(sum(n, x => x.monto))}) sin productos registrados</span><button class="btn sm" data-a="tab" data-v="compras">Registrar</button></div>` : ''; })()}
   <div class="hero">
     <div class="t">Utilidad neta</div>
@@ -1037,7 +1036,7 @@ function mProducto(id) {
       <label class="f">Avisar cuando queden<input class="i num" name="min" inputmode="numeric" value="${x.stock_minimo || ''}" placeholder="0"></label>
       ${id ? `<label class="small chk" style="flex-basis:100%;cursor:pointer"><input type="checkbox" name="activo" ${x.activo?'checked':''}> Activo (aparece para vender)</label>` : ''}
       ${id && costo(id) ? `<div class="small muted" style="flex-basis:100%">Costo promedio actual: <b>${$$(costo(id))}</b> por unidad</div>` : ''}
-      <div class="acts" style="flex-basis:100%"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn">Guardar</button></div>
+      <div class="acts" style="flex-basis:100%">${id ? `<button type="button" class="btn danger" data-a="delProd" data-v="${id}" style="margin-right:auto">${ic('trash')}Eliminar</button>` : ''}<button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn">Guardar</button></div>
     </form>`);
   ov.querySelector('#fProd').onsubmit = async e => {
     e.preventDefault(); const f = e.target;
@@ -1394,40 +1393,23 @@ function initCompras() {
 
 /* ---------- GASTOS ---------- */
 function vGastos() {
-  const G = S.gastos, tot = sum(G, g => g.monto); const porCat = {};
-  G.forEach(g => porCat[g.categoria] = (porCat[g.categoria] || 0) + +g.monto);
-  const pf = S.pagarFijo ? S.fijos.find(f => f.id === S.pagarFijo) : null;
-  const EF = estadoFijos(), mes = MESES[new Date().getMonth()];
+  const G = S.gastos, tot = sum(G, g => g.monto);
   return `${periodoBar()}<h2>Gastos</h2>
-  <p class="small muted" style="margin:-6px 0 14px">Gasto es todo lo que pagas para que el negocio funcione (arriendo, servicios, hielo, transporte…). Se resta de la ganancia para sacar la utilidad neta. Lo que te cuesta la mercancía no va aquí, va en Compras.</p>
-  <div class="card"><div class="row between"><h3 style="margin:0">Gastos fijos de ${mes}</h3><button class="btn sm ghost" data-a="nuevoFijo">${ic('plus')}Gasto fijo</button></div>
-    ${EF.length ? EF.map(({f, pago, dia, vencido, faltan}) => `<div class="li"><div class="m"><b>${esc(f.concepto)}</b>
-      <span>${esc(f.categoria)} · ${$$(f.monto)} · se paga el día ${f.dia_pago} de cada mes</span></div>
-      ${pago ? `<span class="tag ok">Pagado ${fFecha(pago.fecha)} · ${esc(pago.metodo)}</span>`
-             : `<span class="tag ${vencido ? 'bad' : 'warn'}">${vencido ? 'Pendiente · venció día ' + dia : (faltan === 0 ? 'Vence hoy' : 'Faltan ' + faltan + ' días')}</span>
-                <button class="btn sm ok" data-a="pagarFijo" data-v="${f.id}">Pagar</button>`}
-      <button class="ibtn" data-a="editFijo" data-v="${f.id}" title="Editar">${ic('edit')}</button></div>`).join('')
-      : '<div class="empty small">Agrega aquí el arriendo de la bodega y lo que pagues cada mes. La app te avisa cuándo toca pagar y qué ya pagaste.</div>'}
-  </div>
+  <p class="small muted" style="margin:-6px 0 14px">Todo lo que se paga para que el negocio funcione: arriendo, hielo, transporte… Se resta de la ganancia. La mercancía no va aquí, va en Compras.</p>
   <div class="grid2">
     <div class="card"><h3>Registrar gasto</h3>
-      ${pf ? `<div class="calc" style="grid-template-columns:1fr auto;margin-top:0;background:var(--ok-soft)"><div><small>Pagando gasto fijo</small><b style="font-size:15px">${esc(pf.concepto)} · ${mes}</b></div><button type="button" class="btn sm line" data-a="cancelFijo">Quitar</button></div>` : ''}
       <form id="fGasto" class="row" style="gap:12px">
-        <label class="f" style="flex-basis:100%">¿Qué se pagó?<input class="i" name="concepto" required placeholder="Ej: Arriendo bodega octubre" value="${pf ? esc(pf.concepto + ' ' + mes) : ''}"></label>
-        <label class="f">Categoría<select class="i" name="cat">${CATS_GASTO.map(c => `<option ${pf && pf.categoria === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
-        <label class="f">Valor<input class="i num" name="monto" inputmode="numeric" required placeholder="$0" value="${pf ? Math.round(pf.monto) : ''}"></label>
+        <label class="f" style="flex-basis:100%">¿Qué se pagó?<input class="i" name="concepto" required placeholder="Ej: Arriendo bodega, hielo, transporte"></label>
+        <label class="f">Valor<input class="i num" name="monto" inputmode="numeric" required placeholder="$0"></label>
         <label class="f">¿Cuándo?<input class="i" type="date" name="fecha" value="${ymd(new Date())}"></label>
-        <label class="f">¿Cómo se pagó?<select class="i" name="metodo">${METODOS.map(m => `<option>${m}</option>`).join('')}</select></label>
-        <input type="hidden" name="pagado" value="base">
-        <label class="f">Punto<select class="i" name="pt"><option value="">General (todo el negocio)</option>${pVenta().map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></label>
-        <label class="f" style="flex-basis:100%">Nota<input class="i" name="nota" placeholder="A quién se le pagó, # de recibo… (opcional)"></label>
+        <label class="f" style="flex-basis:100%">¿De qué cancha?<select class="i" name="pt"><option value="">General (todo el negocio)</option>${pVenta().map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></label>
+        <input type="hidden" name="cat" value="Otros"><input type="hidden" name="metodo" value="Efectivo"><input type="hidden" name="pagado" value="base"><input type="hidden" name="nota" value="">
         <button class="btn big" style="flex-basis:100%">Guardar gasto</button>
       </form>
-      ${Object.keys(porCat).length ? `<h3 style="margin-top:20px">Por categoría</h3>${Object.entries(porCat).sort((a, b) => b[1] - a[1]).map(([c, v]) => `<div class="li"><div class="m"><b>${esc(c)}</b><div style="height:6px;background:var(--bad-soft);border-radius:4px;margin-top:5px"><div style="height:6px;width:${pct(v, tot)}%;background:var(--bad);border-radius:4px"></div></div></div><div class="a num">${$$(v)}</div></div>`).join('')}` : ''}
     </div>
     <div class="card"><div class="row between"><h3 style="margin:0">Gastos del periodo</h3><b class="num neg">${$$(tot)}</b></div>
       ${G.length ? G.map(g => `<div class="li"><div class="m"><b>${esc(g.concepto)}</b>
-        <span>${fFecha(g.fecha)} · ${esc(g.categoria)} · ${esc(g.metodo || 'Efectivo')} · ${g.pagado_con === 'ventas' ? 'de lo vendido' : 'de la base'} · ${esc(nombrePunto(g.punto_id))}${g.fijo_id ? ' · <span class="tag">fijo</span>' : ''}${g.nota ? '<br>' + esc(g.nota) : ''}</span></div>
+        <span>${fFecha(g.fecha)} · ${esc(nombrePunto(g.punto_id))}${g.cierre_id ? ' · <span class="tag">jornada</span>' : ''}</span></div>
         <div class="a num">${$$(g.monto)}</div><button class="ibtn" data-a="delGasto" data-v="${g.id}">${ic('trash')}</button></div>`).join('') : '<div class="empty">Sin gastos en este periodo</div>'}
     </div>
   </div>`;
@@ -1570,6 +1552,10 @@ document.addEventListener('click', async e => {
       try { await rpc('pagar_fiado', {p_ids:ids}); toast('Fiado pagado · ' + $$(tot), 'ok'); recargar({catalogo:false}); } catch (er) { toast(errMsg(er), 'bad'); } break; }
     case 'nuevoProd': mProducto(); break;
     case 'editProd': mProducto(+v); break;
+    case 'delProd': {
+      const x = prod(+v); if (!x) break;
+      if (!await confirmar(`¿Eliminar “${esc(x.nombre)}”? Se borran también sus compras y lo que hay en inventario. Si solo está mal el nombre, mejor cámbialo y dale Guardar.`, 'Sí, eliminar', true)) break;
+      try { await rpc('eliminar_producto', {p_id:+v}); closeModal(); toast('Producto eliminado', 'ok'); recargar(); } catch (er) { toast(errMsg(er), 'bad'); } break; }
     case 'traslado': mTraslado(+v); break;
     case 'conteo': mConteo(); break;
     case 'enviar': mEnviar(v ? +v : undefined); break;
