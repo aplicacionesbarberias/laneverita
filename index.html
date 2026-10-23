@@ -702,14 +702,15 @@ function caja() {
   const traido = n('traido');                         // plata de ventas pasada a la base para comprar
   const queda = base + traido - compras - n('gastos'); // plata de la base que todavía no se ha gastado
   const ventasCaja = n('ventas') - n('salidas') - traido;
-  const total = queda + ventasCaja;                   // plata que debería haber
+  const prestado = n('prestamos'), pagado = n('pagos_prestamo'), deuda = prestado - pagado;  // préstamos: no son del dueño
+  const total = queda + ventasCaja + deuda;           // plata que debería haber
   // lo que ha generado el negocio desde el inicio
   const ganancia = n('ventas_total') - n('costo_vendido');
   const utilidad = ganancia - n('gastos_total') - n('faltantes') + n('sobrantes');
-  const valor = total + n('inventario') + n('fiado');
+  const valor = total + n('inventario') + n('fiado');  // lo que hay, incluyendo lo prestado
   return { plata, inicial, base, traido, compras, gastos:n('gastos'), ventas:n('ventas'), salidas:n('salidas'), ventasCaja, queda, total, fiado:n('fiado'),
            ventasT:n('ventas_total'), costoT:n('costo_vendido'), ganancia, gastosT:n('gastos_total'), faltantes:n('faltantes') - n('sobrantes'), utilidad,
-           inventario:n('inventario'), valor, crecio: valor - base };
+           inventario:n('inventario'), valor, prestado, pagado, deuda, crecio: valor - deuda - base };
 }
 function cuadroGenerado(K) {
   return `<div class="grid2">
@@ -728,7 +729,8 @@ function cuadroGenerado(K) {
         <tr><td>Plata en caja</td><td class="r num">${$$(K.total)}</td></tr>
         <tr><td class="muted">+ Mercancía en inventario (al costo)</td><td class="r num">${$$(K.inventario)}</td></tr>
         ${K.fiado ? `<tr><td class="muted">+ Fiado por cobrar</td><td class="r num">${$$(K.fiado)}</td></tr>` : ''}
-        <tr><td><b>= Lo que vale La Neverita</b></td><td class="r num"><b>${$$(K.valor)}</b></td></tr>
+        ${K.deuda ? `<tr><td class="muted">− Préstamo por devolver</td><td class="r num neg">${$$(K.deuda)}</td></tr>` : ''}
+        <tr><td><b>= Lo que vale La Neverita</b></td><td class="r num"><b>${$$(K.valor - K.deuda)}</b></td></tr>
         <tr><td class="muted">Lo que tú metiste (base)</td><td class="r num">${$$(K.base)}</td></tr>
       </tbody><tfoot><tr><td>Ha crecido</td><td class="r num ${K.crecio < 0 ? 'neg' : 'pos'}" style="font-size:18px">${$$(K.crecio)}</td></tr></tfoot></table>
     </div>
@@ -746,8 +748,12 @@ function vResumen() {
     <div class="t">Plata del negocio</div>
     <div class="v num ${K.total < 0 ? 'neg' : ''}">${$$(K.total)}</div>
     <div class="s">La plata en físico que debe haber entre todo · desde el inicio</div>
-    <button class="btn sm" data-a="meterPlata" style="margin-top:12px;background:rgba(255,255,255,.16)">${ic('plus')}Meter plata de mi bolsillo</button>
+    <button class="btn sm" data-a="meterPlata" style="margin-top:12px;background:rgba(255,255,255,.16)">${ic('plus')}Meter plata / Préstamo</button>
   </div>
+  ${K.prestado ? `<div class="card" style="border:2px solid ${K.deuda > 0 ? 'var(--warn-soft)' : 'var(--ok-soft)'}"><div class="row between"><div><h3 style="margin:0">Préstamo</h3>
+      <div class="small muted">Me prestaron ${$$(K.prestado)} · ya devolví ${$$(K.pagado)}</div></div>
+      <div style="text-align:right"><div class="small muted">${K.deuda > 0 ? 'Falta devolver' : 'Pagado'}</div><b class="num" style="font-size:22px;color:${K.deuda > 0 ? 'var(--warn)' : 'var(--ok)'}">${$$(Math.max(0, K.deuda))}</b></div></div>
+      ${K.deuda > 0 ? `<button class="btn sm ghost" data-a="pagarPrestamo" style="margin-top:10px">Devolver plata del préstamo</button>` : ''}</div>` : ''}
   ${cuadroGenerado(K)}
   ${periodoBar()}
   <div class="kpis">
@@ -767,20 +773,32 @@ function vResumen() {
       ${bajos.length ? bajos.sort((x, y) => x[1] - y[1]).slice(0, 10).map(([pr, q]) => `<div class="li"><div class="m"><b>${esc(pr.nombre)}</b></div><span class="tag ${q<=0?'bad':'warn'}">${q<=0?'Agotado':q+' und'}</span></div>`).join('') : '<div class="empty">Todo con buen inventario</div>'}
     </div>
   </div>
-  ${S.base.length ? `<div class="card"><h3>Plata que metiste en este periodo</h3>${S.base.map(b => `<div class="li"><div class="m"><b>${b.tipo === 'ingreso' ? 'Plata metida' : b.tipo === 'desde_ventas' ? 'Traído de las ventas' : 'Retiro'}</b><span>${fFecha(b.fecha)}${b.nota ? ' · ' + esc(b.nota) : ''}</span></div><div class="a num ${b.tipo==='retiro'?'neg':'pos'}">${b.tipo==='retiro'?'−':'+'}${$$(b.monto)}</div><button class="ibtn" data-a="delBase" data-v="${b.id}">${ic('trash')}</button></div>`).join('')}</div>` : ''}`;
+  ${S.base.length ? `<div class="card"><h3>Movimientos de plata en este periodo</h3>${S.base.map(b => `<div class="li"><div class="m"><b>${({ingreso:'Plata metida', desde_ventas:'Traído de las ventas', prestamo:'Préstamo recibido', pago_prestamo:'Devolví del préstamo', retiro:'Retiro'})[b.tipo] || b.tipo}</b><span>${fFecha(b.fecha)}${b.nota ? ' · ' + esc(b.nota) : ''}</span></div><div class="a num ${['retiro','pago_prestamo'].includes(b.tipo)?'neg':'pos'}">${['retiro','pago_prestamo'].includes(b.tipo)?'−':'+'}${$$(b.monto)}</div><button class="ibtn" data-a="delBase" data-v="${b.id}">${ic('trash')}</button></div>`).join('')}</div>` : ''}`;
 }
-function mMeterPlata() {
-  const ov = modal(`<h3>Meter plata de mi bolsillo</h3>
-    <p class="small muted" style="margin-top:-6px">Plata nueva para el negocio: base, sencillo para devueltas… Las compras y gastos se descuentan solos.</p>
+function mMeterPlata(tipo = 'ingreso') {
+  const AY = { ingreso:'Plata tuya que metes al negocio: base, sencillo para devueltas… Cuenta como lo que tú invertiste.',
+    prestamo:'Plata que te prestaron para comprar mercancía. Entra a la plata del negocio, pero NO es tuya: queda como deuda hasta que la devuelvas. Tu ganancia se calcula sin contarla.',
+    pago_prestamo:'Lo que devuelves del préstamo. Sale de la plata del negocio y baja la deuda.' };
+  const ov = modal(`<h3>Movimiento de plata</h3>
     <form id="fMP" class="row" style="gap:12px">
+      <div class="chips" style="flex-basis:100%">
+        <label class="chip"><input type="radio" name="tipo" value="ingreso" hidden ${tipo==='ingreso'?'checked':''}>Meter plata mía</label>
+        <label class="chip"><input type="radio" name="tipo" value="prestamo" hidden ${tipo==='prestamo'?'checked':''}>Me prestaron</label>
+        <label class="chip"><input type="radio" name="tipo" value="pago_prestamo" hidden ${tipo==='pago_prestamo'?'checked':''}>Devolví del préstamo</label>
+      </div>
+      <div class="small muted" id="mpAy" style="flex-basis:100%"></div>
       <label class="f">Valor<input class="i num" name="monto" inputmode="numeric" required placeholder="$0"></label>
       <label class="f">Fecha<input class="i" type="date" name="fecha" value="${ymd(new Date())}"></label>
-      <label class="f" style="flex-basis:100%">Nota<input class="i" name="nota" placeholder="Ej: sencillo para devueltas (opcional)"></label>
+      <label class="f" style="flex-basis:100%">Nota<input class="i" name="nota" placeholder="Ej: préstamo de Carlos, sencillo… (opcional)"></label>
       <div class="acts" style="flex-basis:100%"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn">Guardar</button></div>
     </form>`);
-  ov.querySelector('#fMP').onsubmit = async e => { e.preventDefault(); const f = e.target;
-    const r = await sb.from('base_movs').insert({tipo:'ingreso', monto:num(f.monto.value), fecha:fechaISO(f.fecha.value), nota:f.nota.value.trim() || null});
-    if (r.error) return toast(errMsg(r.error), 'bad'); closeModal(); toast('Plata registrada', 'ok'); recargar({catalogo:false}); };
+  const f = ov.querySelector('#fMP');
+  const upd = () => { f.querySelectorAll('label.chip').forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); ov.querySelector('#mpAy').textContent = AY[f.tipo.value]; };
+  f.querySelectorAll('input[name=tipo]').forEach(r => r.onchange = upd); upd();
+  f.onsubmit = async e => { e.preventDefault();
+    if (f.tipo.value === 'pago_prestamo') { const K = caja(); if (num(f.monto.value) > K.deuda && !await confirmar(`Solo debes ${$$(K.deuda)}. ¿Igual registrar ${$$(num(f.monto.value))}?`, 'Sí')) return; }
+    const r = await sb.from('base_movs').insert({tipo:f.tipo.value, monto:num(f.monto.value), fecha:fechaISO(f.fecha.value), nota:f.nota.value.trim() || null});
+    if (r.error) return toast(errMsg(r.error), 'bad'); closeModal(); toast('Guardado', 'ok'); recargar({catalogo:false}); };
 }
 
 /* ---------- CIERRE DE JORNADA ---------- */
@@ -1546,6 +1564,7 @@ document.addEventListener('click', async e => {
       const r = await sb.from(t).delete().eq('id', +v); if (r.error) toast(errMsg(r.error), 'bad'); else { toast('Borrado', 'ok'); recargar({catalogo:false}); } break; }
     case 'liquidar': mLiquidar(); break;
     case 'meterPlata': mMeterPlata(); break;
+    case 'pagarPrestamo': mMeterPlata('pago_prestamo'); break;
     case 'pvC': S.pvC = +v; render(); break;
     case 'cerrarJ': cerrarJornada(+v); break;
     case 'verCierre': mDetalleCierre(+v); break;
