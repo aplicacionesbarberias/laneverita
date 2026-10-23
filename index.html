@@ -568,7 +568,7 @@ async function salir() {
   await sb.auth.signOut(); location.reload();
 }
 // Modo simple: se trabaja por cierre de jornada (vender uno a uno, fiado, ventas y "saqué plata" quedan escondidos)
-const tabs = () => S.dueno ? ['resumen','cierre','inventario','compras','gastos','base'] : ['cierre','inventario'];
+const tabs = () => S.dueno ? ['resumen','cierre','inventario','compras','gastos'] : ['cierre','inventario'];
 function guardarUI() { lsSet('nv-ui-' + S.user.id, {tab:S.tab, pv:S.pv}); }
 
 function vistaConfig() {
@@ -654,7 +654,8 @@ function render() {
 }
 
 function periodoBar() {
-  const ops = [['hoy','Hoy'],['semana','Esta semana'],['semana_ant','Semana pasada'],['mes','Este mes'],['todo','Todo'],['rango','Fechas']];
+  const ops = [['hoy','Hoy'],['semana','Esta semana'],['mes','Este mes'],['todo','Todo']];
+  if (!ops.some(o => o[0] === S.per.tipo)) S.per.tipo = 'semana';
   const {a, b} = rango();
   return `<div class="period"><div class="scrollx"><div class="chips">${ops.map(([k,l]) => `<button class="chip ${S.per.tipo===k?'on':''}" data-a="per" data-v="${k}">${l}</button>`).join('')}</div></div>
     ${S.per.tipo==='rango' ? `<div class="range"><input type="date" class="i" id="pd1" value="${S.per.d1||ymd(a)}"><span class="muted">a</span><input type="date" class="i" id="pd2" value="${S.per.d2||ymd(addDays(b,-1))}"></div>` : ''}
@@ -736,73 +737,50 @@ function cuadroGenerado(K) {
 
 /* ---------- RESUMEN ---------- */
 function vResumen() {
-  const p = S.fPunto, R = calc(p), K = caja();
-  // gráfico
-  const {a, b} = rango(); const dias = Math.round((b - a) / 864e5);
-  let barras = [];
-  if (S.per.tipo === 'todo' || dias > 31) {
-    const m = {}; Object.entries(R.porDia).forEach(([k, d]) => { const mk = k.slice(0,7); const x = m[mk] ||= {v:0,c:0}; x.v += d.v; x.c += d.c; });
-    barras = Object.keys(m).sort().slice(-12).map(k => ({l: MESES[+k.slice(5,7)-1], ...m[k]}));
-  } else {
-    for (let i = 0; i < dias; i++) { const d = addDays(a, i), k = ymd(d); const x = R.porDia[k] || {v:0,c:0}; barras.push({l: dias <= 7 ? DIAS[d.getDay()] : d.getDate(), ...x}); }
-  }
-  const max = Math.max(1, ...barras.map(x => x.v));
-  const chart = `<div class="chart">${barras.map(x => {
-      const g = Math.max(0, x.v - x.c);
-      return `<div class="bar" title="Ventas ${$$(x.v)} · Ganancia ${$$(g)}"><span class="n">${x.v ? (x.v >= 1000 ? fmtN.format(Math.round(x.v/1000)) + 'k' : fmtN.format(x.v)) : ''}</span>
-      <div class="stack" style="height:${Math.max(2, x.v/max*130)}px"><div class="g" style="height:${x.v ? g/x.v*100 : 0}%"></div><div class="c" style="flex:1"></div></div>
-      <span class="l">${x.l}</span></div>`; }).join('')}</div>
-      <div class="legend"><span><i style="background:var(--ok)"></i>Ganancia</span><span><i style="background:#b9d6e6"></i>Costo de lo vendido</span></div>`;
-
+  const R = calc(0), K = caja();
   const top = Object.entries(R.porProd).sort((x, y) => y[1].v - x[1].v);
-  const puntosVisibles = pVenta().filter(pt => !p || pt.id === p);
-  let invCosto = 0, invVenta = 0; const bajos = [];
-  for (const pr of S.productos.filter(x => x.activo)) {
-    const q = p ? stk(p, pr.id) : stkTotal(pr.id);
-    invCosto += q * costo(pr.id); invVenta += q * pr.precio_venta;
-    if (q <= 0 || (pr.stock_minimo && q <= pr.stock_minimo)) bajos.push([pr, q]);
-  }
-
-  return `${periodoBar()}
-  <div class="row between" style="margin-bottom:12px"><h2 style="margin:0">Resumen</h2>${puntoChips(p, 'fpunto')}</div>
-  ${(() => { const n = S.salidas.filter(x => x.tipo === 'compra' && x.estado === 'pendiente'); return n.length ? `<div class="card row between" style="background:var(--warn-soft);box-shadow:none"><span><b>${n.length} compra${n.length>1?'s':''} con plata de las ventas</b> (${$$(sum(n, x => x.monto))}) sin productos registrados</span><button class="btn sm" data-a="tab" data-v="compras">Registrar</button></div>` : ''; })()}
+  const bajos = [];
+  for (const pr of S.productos.filter(x => x.activo)) { const q = stkTotal(pr.id); if (q <= 0 || (pr.stock_minimo && q <= pr.stock_minimo)) bajos.push([pr, q]); }
+  return `
   <div class="hero">
-    <div class="t">Utilidad neta</div>
-    <div class="v num ${R.utilidad < 0 ? 'neg' : ''}">${$$(R.utilidad)}</div>
-    <div class="s num">Ganancia ${$$(R.ganancia)} − Gastos ${$$(R.gastos)}${R.faltantes ? ` − Faltantes ${$$(R.faltantes)}` : ''}</div>
-  </div>
-  <div class="kpis">
-    <div class="kpi k-ventas"><div class="t">Ventas</div><div class="v num">${$$(R.ventas)}</div><div class="s">${R.nVentas} ventas · ${R.unid} unidades</div></div>
-    <div class="kpi k-cost"><div class="t">Costo de lo vendido</div><div class="v num">${$$(R.costoV)}</div><div class="s">Lo que te costó lo que vendiste</div></div>
-    <div class="kpi k-gan"><div class="t">Ganancia</div><div class="v num pos">${$$(R.ganancia)}</div><div class="s">Margen ${pct(R.ganancia, R.ventas)}% · Ventas − costo</div></div>
-    <div class="kpi k-gas"><div class="t">Gastos</div><div class="v num neg">${$$(R.gastos)}</div><div class="s">${p ? 'Solo gastos de este punto' : 'Arriendo, hielo, etc.'}</div></div>
-    <div class="kpi k-com"><div class="t">Inversión (compras)</div><div class="v num">${$$(R.compras)}</div><div class="s">Mercancía comprada en el periodo</div></div>
-    <div class="kpi k-caja"><div class="t">Plata del negocio</div><div class="v num">${$$(K.total)}</div><div class="s">Lo que metiste + lo vendido − compras − gastos</div></div>
-    ${K.fiado ? `<div class="kpi k-com"><div class="t">Fiado por cobrar</div><div class="v num" style="color:var(--warn)">${$$(K.fiado)}</div><div class="s">Lo que te deben</div></div>` : ''}
+    <div class="t">Plata del negocio</div>
+    <div class="v num ${K.total < 0 ? 'neg' : ''}">${$$(K.total)}</div>
+    <div class="s">La plata en físico que debe haber entre todo · desde el inicio</div>
+    <button class="btn sm" data-a="meterPlata" style="margin-top:12px;background:rgba(255,255,255,.16)">${ic('plus')}Meter plata de mi bolsillo</button>
   </div>
   ${cuadroGenerado(K)}
-  <div class="grid2">
-    <div class="card"><h3>Ventas por ${S.per.tipo==='todo'||dias>31?'mes':'día'}</h3>${R.ventas ? chart : '<div class="empty">Aún no hay ventas en este periodo</div>'}</div>
-    <div class="card"><h3>Por punto</h3>
-      <div class="scrollx"><table class="t"><thead><tr><th>Punto</th><th class="r">Ventas</th><th class="r">Ganancia</th><th class="r">Unid.</th></tr></thead><tbody>
-      ${puntosVisibles.map(pt => { const x = R.porPunto[pt.id] || {v:0,c:0,u:0,n:0}; return `<tr><td><b>${esc(pt.nombre)}</b><br><span class="small muted">${x.n} ventas</span></td><td class="r num">${$$(x.v)}</td><td class="r num pos">${$$(x.v - x.c)}</td><td class="r num">${x.u}</td></tr>`; }).join('')}
-      </tbody></table></div>
-      <div class="row" style="margin-top:14px;gap:18px">
-        <div><div class="small muted">Inventario al costo</div><b class="num">${$$(invCosto)}</b></div>
-        <div><div class="small muted">Inventario a precio de venta</div><b class="num">${$$(invVenta)}</b></div>
-      </div>
-    </div>
+  ${periodoBar()}
+  <div class="kpis">
+    <div class="kpi k-ventas"><div class="t">Vendido</div><div class="v num">${$$(R.ventas)}</div><div class="s">${R.unid} unidades</div></div>
+    <div class="kpi k-gan"><div class="t">Ganancia</div><div class="v num pos">${$$(R.ganancia)}</div><div class="s">Vendido − lo que costó</div></div>
+    <div class="kpi k-gas"><div class="t">Gastos</div><div class="v num neg">${$$(R.gastos)}</div></div>
+    <div class="kpi k-caja"><div class="t">Utilidad</div><div class="v num ${R.utilidad < 0 ? 'neg' : 'pos'}">${$$(R.utilidad)}</div><div class="s">Ganancia − gastos</div></div>
+    <div class="kpi k-com"><div class="t">Compras</div><div class="v num">${$$(R.compras)}</div><div class="s">Mercancía comprada</div></div>
   </div>
   <div class="grid2">
     <div class="card"><h3>Lo que más se vende</h3>
-      ${top.length ? `<div class="scrollx"><table class="t"><thead><tr><th>Producto</th><th class="r">Unid.</th><th class="r">Ventas</th><th class="r">Ganancia</th><th class="r">Margen</th></tr></thead><tbody>
-      ${top.slice(0, 12).map(([, x]) => `<tr><td>${esc(x.n)}</td><td class="r num">${x.u}</td><td class="r num">${$$(x.v)}</td><td class="r num pos">${$$(x.v - x.c)}</td><td class="r num">${pct(x.v - x.c, x.v)}%</td></tr>`).join('')}
-      </tbody></table></div>` : '<div class="empty">Sin ventas todavía</div>'}
+      ${top.length ? `<table class="t"><thead><tr><th>Producto</th><th class="r">Unid.</th><th class="r">Vendido</th><th class="r">Ganancia</th></tr></thead><tbody>
+      ${top.slice(0, 10).map(([, x]) => `<tr><td>${esc(x.n)}</td><td class="r num">${x.u}</td><td class="r num">${$$(x.v)}</td><td class="r num pos">${$$(x.v - x.c)}</td></tr>`).join('')}
+      </tbody></table>` : '<div class="empty">Sin ventas en este periodo</div>'}
     </div>
     <div class="card"><h3>Por acabarse</h3>
-      ${bajos.length ? bajos.sort((x, y) => x[1] - y[1]).slice(0, 12).map(([pr, q]) => `<div class="li"><div class="m"><b>${esc(pr.nombre)}</b></div><span class="tag ${q<=0?'bad':'warn'}">${q<=0?'Agotado':q+' und'}</span></div>`).join('') : '<div class="empty">Todo con buen inventario</div>'}
+      ${bajos.length ? bajos.sort((x, y) => x[1] - y[1]).slice(0, 10).map(([pr, q]) => `<div class="li"><div class="m"><b>${esc(pr.nombre)}</b></div><span class="tag ${q<=0?'bad':'warn'}">${q<=0?'Agotado':q+' und'}</span></div>`).join('') : '<div class="empty">Todo con buen inventario</div>'}
     </div>
-  </div>`;
+  </div>
+  ${S.base.length ? `<div class="card"><h3>Plata que metiste en este periodo</h3>${S.base.map(b => `<div class="li"><div class="m"><b>${b.tipo === 'ingreso' ? 'Plata metida' : b.tipo === 'desde_ventas' ? 'Traído de las ventas' : 'Retiro'}</b><span>${fFecha(b.fecha)}${b.nota ? ' · ' + esc(b.nota) : ''}</span></div><div class="a num ${b.tipo==='retiro'?'neg':'pos'}">${b.tipo==='retiro'?'−':'+'}${$$(b.monto)}</div><button class="ibtn" data-a="delBase" data-v="${b.id}">${ic('trash')}</button></div>`).join('')}</div>` : ''}`;
+}
+function mMeterPlata() {
+  const ov = modal(`<h3>Meter plata de mi bolsillo</h3>
+    <p class="small muted" style="margin-top:-6px">Plata nueva para el negocio: base, sencillo para devueltas… Las compras y gastos se descuentan solos.</p>
+    <form id="fMP" class="row" style="gap:12px">
+      <label class="f">Valor<input class="i num" name="monto" inputmode="numeric" required placeholder="$0"></label>
+      <label class="f">Fecha<input class="i" type="date" name="fecha" value="${ymd(new Date())}"></label>
+      <label class="f" style="flex-basis:100%">Nota<input class="i" name="nota" placeholder="Ej: sencillo para devueltas (opcional)"></label>
+      <div class="acts" style="flex-basis:100%"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn">Guardar</button></div>
+    </form>`);
+  ov.querySelector('#fMP').onsubmit = async e => { e.preventDefault(); const f = e.target;
+    const r = await sb.from('base_movs').insert({tipo:'ingreso', monto:num(f.monto.value), fecha:fechaISO(f.fecha.value), nota:f.nota.value.trim() || null});
+    if (r.error) return toast(errMsg(r.error), 'bad'); closeModal(); toast('Plata registrada', 'ok'); recargar({catalogo:false}); };
 }
 
 /* ---------- CIERRE DE JORNADA ---------- */
@@ -1012,12 +990,6 @@ function vInventario() {
     <div class="row">${buscador}
       ${bodega() ? `<button class="btn ice sm" data-a="enviar">${ic('truck')}Enviar a cancha</button>` : ''}
       <button class="btn ghost sm" data-a="conteo">${ic('check')}Conteo físico</button></div></div>
-  <div class="kpis">
-    <div class="kpi k-caja"><div class="t">Unidades en inventario</div><div class="v num">${fmtN.format(tu)}</div><div class="s">${datos.length} productos</div></div>
-    <div class="kpi k-com"><div class="t">Vale al costo</div><div class="v num">${$$(tc)}</div><div class="s">Lo que te costó lo que hay</div></div>
-    <div class="kpi k-ventas"><div class="t">Vale a precio de venta</div><div class="v num">${$$(tv)}</div><div class="s">Si vendes todo</div></div>
-    <div class="kpi k-gan"><div class="t">Ganancia por vender</div><div class="v num pos">${$$(tv - tc)}</div><div class="s">${pct(tv - tc, tv)}% de margen</div></div>
-  </div>
   <div class="kpis">${S.puntos.map(p => { const L = porLugar[p.id]; return `<div class="kpi ${pc(p.id)} kl"><div class="t"><i class="dot"></i>${esc(p.nombre)}</div><div class="v num">${fmtN.format(L.u)} und</div><div class="s">Al costo ${$$(L.c)} · a la venta ${$$(L.v)}</div></div>`; }).join('')}</div>
   <div class="card"><div class="row between" style="margin-bottom:6px"><span class="small muted">Unidades por lugar y cuánto vale. Costo = promedio por unidad según tus compras.</span>
     <label class="small muted chk"><input type="checkbox" id="invInact" ${S.invInact?'checked':''}> Ver inactivos</label></div>
@@ -1326,8 +1298,8 @@ function vCompras() {
         <label class="f">¿A cuánto vas a vender cada unidad?<input class="i num" name="pventa" id="cPv" inputmode="numeric" placeholder="$0"></label>
         <div class="chips" id="cSug" style="margin:8px 0"></div>
         <div class="small" id="cGan" style="min-height:20px"></div>
-        <label class="f" style="margin-top:8px">Nota<input class="i" name="nota" placeholder="Proveedor, factura… (opcional)"></label>
-        <label class="small chk" style="margin-top:10px;cursor:pointer"><input type="checkbox" name="inicial"> Es mercancía que ya tenía (se suma sola a la base como capital y no cuenta como compra de la semana)</label>
+        <input type="hidden" name="nota" value="">
+        <label class="small chk hidden" style="margin-top:10px;cursor:pointer"><input type="checkbox" name="inicial"> Es mercancía que ya tenía (se suma sola a la base como capital y no cuenta como compra de la semana)</label>
         <button class="btn big" style="margin-top:14px">Guardar compra</button>
       </form>
     </div>
@@ -1573,6 +1545,7 @@ document.addEventListener('click', async e => {
       const t = {delGasto:'gastos', delBase:'base_movs', delLiq:'liquidaciones'}[a];
       const r = await sb.from(t).delete().eq('id', +v); if (r.error) toast(errMsg(r.error), 'bad'); else { toast('Borrado', 'ok'); recargar({catalogo:false}); } break; }
     case 'liquidar': mLiquidar(); break;
+    case 'meterPlata': mMeterPlata(); break;
     case 'pvC': S.pvC = +v; render(); break;
     case 'cerrarJ': cerrarJornada(+v); break;
     case 'verCierre': mDetalleCierre(+v); break;
