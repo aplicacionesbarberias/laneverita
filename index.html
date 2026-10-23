@@ -207,6 +207,10 @@ td.cell{background:var(--pcs);color:var(--pc);font-weight:700}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--pc)}
 .tag.tp{background:var(--pcs);color:var(--pc)}
 
+.tcierre td,.tcierre th{padding:8px 5px}
+.tcierre td:first-child{font-size:14px}
+.tcierre .small{font-size:11.5px}
+
 /* ---------- inventario ---------- */
 .icard{border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px;display:flex;flex-direction:column;gap:10px}
 .icard b{font-size:15px}
@@ -335,6 +339,7 @@ const LOGO = (w=34) => `<svg width="${w}" height="${w}" viewBox="0 0 64 64"><rec
 
 const TABS = {
   resumen:   ['Resumen',   'chart'],
+  cierre:    ['Cierre',    'check'],
   vender:    ['Vender',    'cart'],
   inventario:['Inventario','box'],
   ventas:    ['Ventas',    'receipt'],
@@ -397,7 +402,7 @@ const S = {
   user:null, perfil:null, dueno:false, tab:null,
   puntos:[], productos:[], stock:{}, costos:{},
   per:{tipo:'semana', d1:null, d2:null}, fPunto:0,
-  ventas:[], vcost:{}, compras:[], gastos:[], base:[], ajustes:[], liqs:[], salidas:[], fiadosPend:[], cobrados:[], fiadoAbierto:null, fijos:[], gastosMes:[], tot:null, salidaSel:null, pagarFijo:null,
+  ventas:[], vcost:{}, compras:[], gastos:[], base:[], ajustes:[], liqs:[], salidas:[], cierres:[], gJornada:{}, cCostos:{}, pvC:null, fiadosPend:[], cobrados:[], fiadoAbierto:null, fijos:[], gastosMes:[], tot:null, salidaSel:null, pagarFijo:null,
   pv:null, carrito:{}, busq:'', cat:'Todas', recibido:'', cartOpen:false,
   invBusq:'', invInact:false, busy:false, loaded:false
 };
@@ -499,13 +504,23 @@ function guardarCache() {
     ventas:S.ventas, vcost:S.vcost, compras:S.compras, gastos:S.gastos, base:S.base, ajustes:S.ajustes, liqs:S.liqs, salidas:S.salidas, fiadosPend:S.fiadosPend, cobrados:S.cobrados, fijos:S.fijos, gastosMes:S.gastosMes, tot:S.tot
   });
 }
+async function cargarCierres() {
+  const cs = await all(() => sb.from('cierres').select('*, venta:ventas(id,total,anulada,fecha,venta_items(*))').order('abierto_en', {ascending:false}));
+  const ids = cs.map(c => c.id), vids = cs.map(c => c.venta?.id).filter(Boolean);
+  const [gs, cc] = await Promise.all([
+    ids.length ? all(() => sb.from('gastos').select('*').in('cierre_id', ids)) : [],
+    S.dueno && vids.length ? all(() => sb.from('venta_costos').select('item_id,costo_unit').in('venta_id', vids)) : []
+  ]);
+  S.cierres = cs; S.gJornada = {}; gs.forEach(g => (S.gJornada[g.cierre_id] ||= []).push(g));
+  S.cCostos = {}; cc.forEach(x => S.cCostos[x.item_id] = +x.costo_unit);
+}
 let cargando = null;
 async function recargar({catalogo=true, periodo=true, silencioso=false} = {}) {
   if (cargando) return cargando;
   S.busy = true; marcarSync();
   cargando = (async () => {
     try {
-      await Promise.all([catalogo && cargarCatalogo(), periodo && cargarPeriodo()]);
+      await Promise.all([catalogo && cargarCatalogo(), periodo && cargarPeriodo(), cargarCierres()]);
       S.loaded = true; guardarCache(); render();
     } catch (e) { if (!silencioso) toast(errMsg(e), 'bad'); console.error(e); }
     finally { S.busy = false; cargando = null; marcarSync(); }
@@ -522,6 +537,7 @@ function tiempoReal() {
     .on('postgres_changes', {event:'*', schema:'public', table:'ventas'}, ping)
     .on('postgres_changes', {event:'*', schema:'public', table:'productos'}, ping)
     .on('postgres_changes', {event:'*', schema:'public', table:'salidas_caja'}, ping)
+    .on('postgres_changes', {event:'*', schema:'public', table:'cierres'}, ping)
     .subscribe();
 }
 
@@ -539,7 +555,7 @@ async function entrar(user) {
   S.perfil = data; S.dueno = data.rol === 'dueno';
   if (!S.dueno && !data.punto_id) { toast('Tu usuario no tiene punto asignado (usa punto1 o punto2).', 'bad'); await sb.auth.signOut(); return vistaLogin(); }
   const ui = lsGet('nv-ui-' + user.id) || {};
-  S.tab = ui.tab && tabs().includes(ui.tab) ? ui.tab : (S.dueno ? 'resumen' : 'vender');
+  S.tab = ui.tab && tabs().includes(ui.tab) ? ui.tab : (S.dueno ? 'resumen' : 'cierre');
   S.pv = S.dueno ? (ui.pv || 1) : data.punto_id;
   const cache = lsGet('nv-cache-' + user.id);
   if (cache) { Object.assign(S, cache); S.loaded = true; }
@@ -551,7 +567,8 @@ async function salir() {
   if (!await confirmar('¿Cerrar sesión?', 'Salir')) return;
   await sb.auth.signOut(); location.reload();
 }
-const tabs = () => S.dueno ? ['resumen','vender','inventario','ventas','compras','gastos','base'] : ['vender','inventario','ventas'];
+// Modo simple: se trabaja por cierre de jornada (vender uno a uno, fiado, ventas y "saqué plata" quedan escondidos)
+const tabs = () => S.dueno ? ['resumen','cierre','inventario','compras','gastos','base'] : ['cierre','inventario'];
 function guardarUI() { lsSet('nv-ui-' + S.user.id, {tab:S.tab, pv:S.pv}); }
 
 function vistaConfig() {
@@ -630,7 +647,7 @@ function render() {
   $('#nav').innerHTML = tabs().map(t => `<button class="${t===S.tab?'on':''}" data-a="tab" data-v="${t}">${ic(TABS[t][1])}<span>${TABS[t][0]}</span></button>`).join('');
   marcarSync();
   if (!S.loaded) { $('#main').innerHTML = `<div class="loading"><div class="spin"></div>Cargando…</div>`; return; }
-  const V = { resumen:vResumen, vender:vVender, inventario:vInventario, ventas:vVentas, compras:vCompras, gastos:vGastos, base:vBase }[S.tab];
+  const V = { resumen:vResumen, cierre:vCierre, vender:vVender, inventario:vInventario, ventas:vVentas, compras:vCompras, gastos:vGastos, base:vBase }[S.tab];
   $('#main').innerHTML = V();
   afterRender();
   if (yaHay) window.scrollTo(0, scroll);
@@ -761,7 +778,7 @@ function vResumen() {
     <div class="kpi k-gan"><div class="t">Ganancia</div><div class="v num pos">${$$(R.ganancia)}</div><div class="s">Margen ${pct(R.ganancia, R.ventas)}% · Ventas − costo</div></div>
     <div class="kpi k-gas"><div class="t">Gastos</div><div class="v num neg">${$$(R.gastos)}</div><div class="s">${p ? 'Solo gastos de este punto' : 'Arriendo, hielo, etc.'}</div></div>
     <div class="kpi k-com"><div class="t">Inversión (compras)</div><div class="v num">${$$(R.compras)}</div><div class="s">Mercancía comprada en el periodo</div></div>
-    <div class="kpi k-caja"><div class="t">Total en caja</div><div class="v num">${$$(K.total)}</div><div class="s">Base que queda + ventas cobradas (acumulado)</div></div>
+    <div class="kpi k-caja"><div class="t">Plata del negocio</div><div class="v num">${$$(K.total)}</div><div class="s">Lo que metiste + lo vendido − compras − gastos</div></div>
     ${K.fiado ? `<div class="kpi k-com"><div class="t">Fiado por cobrar</div><div class="v num" style="color:var(--warn)">${$$(K.fiado)}</div><div class="s">Lo que te deben</div></div>` : ''}
   </div>
   ${cuadroGenerado(K)}
@@ -787,6 +804,117 @@ function vResumen() {
       ${bajos.length ? bajos.sort((x, y) => x[1] - y[1]).slice(0, 12).map(([pr, q]) => `<div class="li"><div class="m"><b>${esc(pr.nombre)}</b></div><span class="tag ${q<=0?'bad':'warn'}">${q<=0?'Agotado':q+' und'}</span></div>`).join('') : '<div class="empty">Todo con buen inventario</div>'}
     </div>
   </div>`;
+}
+
+/* ---------- CIERRE DE JORNADA ---------- */
+const draftKey = id => 'nv-quedo-' + id;
+const costo_ = id => +S.costos[id] || 0;
+function resumenCierre(c) {
+  const items = (c.venta && !c.venta.anulada) ? (c.venta.venta_items || []) : [];
+  const vendido = sum(items, it => it.subtotal), costoV = sum(items, it => (S.cCostos[it.id] ?? 0) * it.cantidad);
+  const gastos = sum(S.gJornada[c.id] || [], g => g.monto);
+  return { items, vendido, costoV, ganancia: vendido - costoV, gastos, utilidad: vendido - costoV - gastos, plata: vendido - gastos };
+}
+function vCierre() {
+  const pv = S.dueno ? (S.pvC && pVenta().some(p => p.id === S.pvC) ? S.pvC : pVenta()[0]?.id) : S.perfil.punto_id;
+  const ab = S.cierres.find(c => c.punto_id === pv && c.estado === 'abierto');
+  const hist = S.cierres.filter(c => c.punto_id === pv && c.estado === 'cerrado').slice(0, 30);
+  const head = `<div class="row between" style="margin-bottom:12px"><h2 style="margin:0">Cierre de jornada ${S.dueno ? '' : `<span class="tag ${pc(pv)} tp">${esc(nombrePunto(pv))}</span>`}</h2>${S.dueno ? puntoChips(pv, 'pvC', false) : ''}</div>`;
+  const historial = `<div class="card"><h3>Jornadas cerradas · ${esc(nombrePunto(pv))}</h3>
+    ${hist.length ? hist.map(c => { const R = resumenCierre(c); return `<div class="li" data-a="verCierre" data-v="${c.id}" style="cursor:pointer"><div class="m"><b>${esc(c.nombre)}</b><span>${fFecha(c.abierto_en)} → ${c.cerrado_en ? fFecha(c.cerrado_en) : 'abierta'} · gastos ${$$(R.gastos)}${S.dueno ? ' · utilidad <b class="' + (R.utilidad < 0 ? 'neg' : 'pos') + '">' + $$(R.utilidad) + '</b>' : ''}</span></div><div class="a num">${$$(R.vendido)}</div></div>`; }).join('')
+      : '<div class="empty small">Todavía no hay jornadas cerradas en esta cancha.</div>'}</div>`;
+  if (!ab) return `${head}
+    <div class="card"><h3>Abrir jornada</h3>
+      <p class="small muted" style="margin-top:-4px">1) Abre la jornada · 2) llega la mercancía · 3) al final cuenta lo que quedó y cierra. La app saca lo vendido, los gastos y la utilidad.</p>
+      <form id="fAbrir" class="row" style="gap:12px"><label class="f">Nombre<input class="i" name="nom" value="Jornada ${fFecha(new Date())}"></label>
+      <button class="btn ok" style="align-self:flex-end">Abrir jornada</button></form></div>
+    ${historial}`;
+  const ini = ab.inicial || {}, draft = lsGet(draftKey(ab.id)) || {};
+  const prods = S.productos.filter(x => x.activo && (stk(pv, x.id) > 0 || (+ini[x.id] || 0) > 0)).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  const G = S.gJornada[ab.id] || [];
+  return `${head}
+  <div class="card" style="border:2px solid var(--ok-soft)"><div class="row between"><div><h3 style="margin:0">${esc(ab.nombre)}</h3><div class="small muted">Abierta ${fFecha(ab.abierto_en)} ${fHora(ab.abierto_en)}${ab.abierto_por ? ' · ' + esc(ab.abierto_por) : ''}</div></div>
+    ${S.dueno && bodega() ? `<button class="btn sm ice" data-a="enviar" data-v="${pv}">${ic('truck')}Mandar mercancía</button>` : ''}</div></div>
+  <div class="card"><h3>¿Cuánto quedó?</h3>
+    <p class="small muted" style="margin-top:-4px">Cuenta lo que quedó de cada producto y escríbelo. Si lo dejas vacío, se toma que no se vendió.</p>
+    ${prods.length ? `<table class="t tcierre"><thead><tr><th>Producto</th><th class="r">Quedó</th><th class="r">Vendió</th><th class="r">Total</th></tr></thead><tbody>
+    ${prods.map(x => { const h = +ini[x.id] || 0, hay = stk(pv, x.id); return `<tr>
+      <td><b>${esc(x.nombre)}</b><div class="small muted">había ${h} · entró ${hay - h} · hay ${hay} · ${$$(x.precio_venta)} c/u</div></td>
+      <td class="r"><input class="i num qin qd" inputmode="numeric" data-p="${x.id}" data-hay="${hay}" value="${esc(draft[x.id] ?? '')}" placeholder="?"></td>
+      <td class="r num" id="cv${x.id}">—</td><td class="r num" id="ct${x.id}">—</td></tr>`; }).join('')}
+    </tbody></table>` : `<div class="empty">No hay mercancía en esta cancha. ${S.dueno ? 'Mándala desde la Bodega o regístrala en Compras.' : 'Pídele al dueño que la mande.'}</div>`}
+  </div>
+  <div class="card"><h3>Gastos de la jornada</h3>
+    ${G.map(g => `<div class="li"><div class="m"><b>${esc(g.concepto)}</b><span>${fFecha(g.fecha)}</span></div><div class="a num neg">−${$$(g.monto)}</div><button class="ibtn" data-a="delGastoJ" data-v="${g.id}">${ic('trash')}</button></div>`).join('')}
+    <form id="fGastoJ" class="row" style="gap:8px;margin-top:8px;flex-wrap:nowrap"><input class="i" name="c" placeholder="Ej: hielo, bolsas" style="flex:2;min-width:0"><input class="i num" name="m" inputmode="numeric" placeholder="$0" style="flex:1;min-width:0"><button class="btn sm">${ic('plus')}</button></form>
+  </div>
+  <div class="card" id="cTot"></div>
+  <button class="btn big ok" data-a="cerrarJ" data-v="${ab.id}" style="margin-bottom:14px">Cerrar jornada</button>
+  ${historial}`;
+}
+function calcCierre() {
+  const tb = $('#cTot'); if (!tb) return;
+  let vend = 0, costo = 0, und = 0, vacios = 0;
+  document.querySelectorAll('input.qd').forEach(i => {
+    const id = +i.dataset.p, hay = +i.dataset.hay, x = prod(id);
+    const vacio = i.value.trim() === ''; if (vacio) vacios++;
+    const q = vacio ? hay : Math.round(num(i.value)), v = hay - q;
+    $('#cv' + id).innerHTML = vacio ? '<span class="muted">—</span>' : v >= 0 ? `<b>${v}</b>` : `<span class="pos">+${-v}</span>`;
+    $('#ct' + id).textContent = !vacio && v > 0 ? $$(v * x.precio_venta) : '—';
+    if (v > 0) { vend += v * x.precio_venta; costo += v * costo_(id); und += v; }
+  });
+  const ab = S.cierres.find(c => c.id === +$('[data-a=cerrarJ]')?.dataset.v);
+  const gastos = sum((ab && S.gJornada[ab.id]) || [], g => g.monto);
+  tb.innerHTML = `<h3>Resultado de la jornada</h3><table class="t"><tbody>
+    <tr><td>Vendido (${und} und)</td><td class="r num"><b>${$$(vend)}</b></td></tr>
+    ${S.dueno ? `<tr><td class="muted">− Lo que costó lo vendido</td><td class="r num">${$$(costo)}</td></tr><tr><td>= Ganancia</td><td class="r num pos">${$$(vend - costo)}</td></tr>` : ''}
+    <tr><td class="muted">− Gastos</td><td class="r num neg">${$$(gastos)}</td></tr>
+    ${S.dueno ? `<tr><td><b>= Utilidad</b></td><td class="r num ${vend - costo - gastos < 0 ? 'neg' : 'pos'}"><b>${$$(vend - costo - gastos)}</b></td></tr>` : ''}
+  </tbody><tfoot><tr><td>Plata que debe haber</td><td class="r num" style="font-size:18px">${$$(vend - gastos)}</td></tr></tfoot></table>
+  ${vacios ? `<div class="small" style="color:var(--warn);margin-top:6px">${vacios} producto${vacios > 1 ? 's' : ''} sin contar</div>` : ''}`;
+}
+function initCierre() {
+  if (S.tab !== 'cierre') return;
+  const fa = $('#fAbrir');
+  if (fa) fa.onsubmit = async e => { e.preventDefault(); const pv = S.dueno ? (S.pvC || pVenta()[0]?.id) : S.perfil.punto_id;
+    try { await rpc('abrir_jornada', {p_punto:pv, p_nombre:fa.nom.value}); toast('Jornada abierta', 'ok'); recargar({periodo:false}); } catch (er) { toast(errMsg(er), 'bad'); } };
+  const btn = $('[data-a=cerrarJ]'); const cid = btn ? +btn.dataset.v : null;
+  document.querySelectorAll('input.qd').forEach(i => i.addEventListener('input', () => { const d = lsGet(draftKey(cid)) || {}; if (i.value.trim() === '') delete d[i.dataset.p]; else d[i.dataset.p] = i.value; lsSet(draftKey(cid), d); calcCierre(); }));
+  const fg = $('#fGastoJ');
+  if (fg) fg.onsubmit = async e => { e.preventDefault();
+    try { await rpc('gasto_jornada', {p_cierre:cid, p_concepto:fg.c.value.trim(), p_monto:num(fg.m.value)}); toast('Gasto agregado', 'ok'); recargar({catalogo:false}); } catch (er) { toast(errMsg(er), 'bad'); } };
+  calcCierre();
+}
+async function cerrarJornada(cid) {
+  const ab = S.cierres.find(c => c.id === cid); if (!ab) return;
+  const items = []; let vacios = 0;
+  document.querySelectorAll('input.qd').forEach(i => { const hay = +i.dataset.hay; const vacio = i.value.trim() === ''; if (vacio) vacios++;
+    items.push({producto_id:+i.dataset.p, quedo: vacio ? hay : Math.max(0, Math.round(num(i.value)))}); });
+  const vend = sum(items, it => Math.max(0, stk(ab.punto_id, it.producto_id) - it.quedo) * (prod(it.producto_id)?.precio_venta || 0));
+  if (!await confirmar(`¿Cerrar “${esc(ab.nombre)}”? Vendido ${$$(vend)}.${vacios ? ` ${vacios} producto(s) sin contar se toman como no vendidos.` : ''}`, 'Sí, cerrar')) return;
+  try { await rpc('cerrar_jornada', {p_cierre:cid, p_items:items}); try { localStorage.removeItem(draftKey(cid)); } catch {}
+    toast('Jornada cerrada', 'ok'); await recargar(); mDetalleCierre(cid);
+  } catch (er) { toast(errMsg(er), 'bad'); }
+}
+function textoCierre(c) {
+  const R = resumenCierre(c);
+  return `*${CONFIG.NOMBRE}*\n${c.nombre} · ${nombrePunto(c.punto_id)}\n${fFecha(c.abierto_en)} → ${c.cerrado_en ? fFecha(c.cerrado_en) : 'abierta'}\n\n${R.items.map(it => `• ${it.cantidad} × ${it.nombre} = ${$$(it.subtotal)}`).join('\n')}\n\n*VENDIDO: ${$$(R.vendido)}*${R.gastos ? `\nGastos: −${$$(R.gastos)}` : ''}\n*PLATA QUE DEBE HABER: ${$$(R.plata)}*`;
+}
+function mDetalleCierre(id) {
+  const c = S.cierres.find(x => x.id === id); if (!c) return;
+  const R = resumenCierre(c), q = {}; (c.quedo || []).forEach(x => q[x.producto_id] = x.quedo);
+  const G = S.gJornada[c.id] || [];
+  modal(`<h3>${esc(c.nombre)}</h3><p class="small muted" style="margin-top:-8px">${esc(nombrePunto(c.punto_id))} · ${fFecha(c.abierto_en)} → ${c.cerrado_en ? fFecha(c.cerrado_en) : 'abierta'}</p>
+    <div class="scrollx"><table class="t"><thead><tr><th>Producto</th><th class="r">Vendió</th><th class="r">Precio</th><th class="r">Total</th>${S.dueno ? '<th class="r">Ganancia</th>' : ''}<th class="r">Quedó</th></tr></thead><tbody>
+    ${R.items.map(it => `<tr><td>${esc(it.nombre)}</td><td class="r num">${it.cantidad}</td><td class="r num">${$$(it.precio_unit)}</td><td class="r num">${$$(it.subtotal)}</td>${S.dueno ? `<td class="r num pos">${$$(it.subtotal - (S.cCostos[it.id] ?? 0) * it.cantidad)}</td>` : ''}<td class="r num">${q[it.producto_id] ?? '—'}</td></tr>`).join('') || `<tr><td colspan="6" class="empty">No se vendió nada</td></tr>`}
+    </tbody></table></div>
+    <table class="t" style="margin-top:12px"><tbody>
+      <tr><td>Vendido</td><td class="r num"><b>${$$(R.vendido)}</b></td></tr>
+      ${S.dueno ? `<tr><td class="muted">− Lo que costó lo vendido</td><td class="r num">${$$(R.costoV)}</td></tr>` : ''}
+      ${G.map(g => `<tr><td class="muted">− ${esc(g.concepto)}</td><td class="r num neg">${$$(g.monto)}</td></tr>`).join('')}
+      ${S.dueno ? `<tr><td><b>= Utilidad</b></td><td class="r num ${R.utilidad < 0 ? 'neg' : 'pos'}"><b>${$$(R.utilidad)}</b></td></tr>` : ''}
+    </tbody><tfoot><tr><td>Plata que debe haber</td><td class="r num">${$$(R.plata)}</td></tr></tfoot></table>
+    <div class="acts">${S.dueno ? `<button class="btn danger sm" data-a="reabrirJ" data-v="${c.id}">Reabrir</button>` : ''}<button class="btn line" data-a="waCierre" data-v="${c.id}">${ic('wa')}WhatsApp</button><button class="btn" data-a="close">Listo</button></div>`, 'wide');
 }
 
 /* ---------- VENDER ---------- */
@@ -1290,7 +1418,7 @@ function vGastos() {
         <label class="f">Valor<input class="i num" name="monto" inputmode="numeric" required placeholder="$0" value="${pf ? Math.round(pf.monto) : ''}"></label>
         <label class="f">¿Cuándo?<input class="i" type="date" name="fecha" value="${ymd(new Date())}"></label>
         <label class="f">¿Cómo se pagó?<select class="i" name="metodo">${METODOS.map(m => `<option>${m}</option>`).join('')}</select></label>
-        <label class="f">¿De dónde salió la plata?<select class="i" name="pagado"><option value="base">De la base</option><option value="ventas">De lo vendido</option></select></label>
+        <input type="hidden" name="pagado" value="base">
         <label class="f">Punto<select class="i" name="pt"><option value="">General (todo el negocio)</option>${pVenta().map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></label>
         <label class="f" style="flex-basis:100%">Nota<input class="i" name="nota" placeholder="A quién se le pagó, # de recibo… (opcional)"></label>
         <button class="btn big" style="flex-basis:100%">Guardar gasto</button>
@@ -1339,24 +1467,23 @@ function mFijo(id) {
 /* ---------- BASE ---------- */
 function vBase() {
   const K = caja(), B = S.base, R = calc(0);
-  return `${periodoBar()}<h2>Manejo de la base</h2>
+  return `${periodoBar()}<h2>Plata y base</h2>
   <div class="hero">
-    <div class="t">Te queda de la base</div>
-    <div class="v num ${K.queda < 0 ? 'neg' : ''}">${$$(K.queda)}</div>
-    <div class="s num">Base ${$$(K.base)}${K.traido ? ' + traído de las ventas ' + $$(K.traido) : ''} − Invertido en mercancía ${$$(K.compras)} − Gastos ${$$(K.gastos)} pagados con la base · desde el inicio</div>
+    <div class="t">Plata del negocio</div>
+    <div class="v num ${K.total < 0 ? 'neg' : ''}">${$$(K.total)}</div>
+    <div class="s num">Lo que metiste en plata ${$$(K.plata)} + lo vendido ${$$(K.ventas)} − compras y gastos · desde el inicio. Es la plata en físico que debe haber.</div>
   </div>
   <div class="kpis">
     <div class="kpi k-caja"><div class="t">Base (lo que has metido)</div><div class="v num">${$$(K.base)}</div><div class="s">Plata ${$$(K.plata)}${K.inicial ? ' + mercancía con que arrancaste ' + $$(K.inicial) : ''}</div></div>
     <div class="kpi k-com"><div class="t">Invertido en mercancía</div><div class="v num">${$$(K.compras)}</div><div class="s">${pct(K.compras, K.base)}% de la base</div></div>
     <div class="kpi k-gas"><div class="t">Gastos</div><div class="v num neg">${$$(K.gastos)}</div></div>
     <div class="kpi k-ventas"><div class="t">Ventas</div><div class="v num">${$$(K.ventas)}</div><div class="s">${K.salidas || K.traido ? `Quedan en ventas ${$$(K.ventasCaja)}${K.traido ? ' (pasaste ' + $$(K.traido) + ' a la base)' : ''}` : 'Plata que ha entrado'}</div></div>
-    <div class="kpi k-gan"><div class="t">Total (queda + ventas en caja)</div><div class="v num">${$$(K.total)}</div><div class="s">Lo que debería haber en caja</div></div>
   </div>
   ${cuadroGenerado(K)}
   <div class="grid2">
-    <div class="card"><h3>Registrar movimiento de base</h3>
+    <div class="card"><h3>Meter plata al negocio</h3>
       <form id="fBase" class="row" style="gap:12px">
-        <div class="chips" style="flex-basis:100%"><label class="chip on"><input type="radio" name="tipo" value="ingreso" checked hidden>Meter base</label><label class="chip"><input type="radio" name="tipo" value="desde_ventas" hidden>Traer plata de las ventas</label><label class="chip"><input type="radio" name="tipo" value="retiro" hidden>Sacar plata</label></div>
+        <div class="chips hidden" style="flex-basis:100%"><label class="chip on"><input type="radio" name="tipo" value="ingreso" checked hidden>Meter base</label></div>
         <div class="small muted" id="bAyuda" style="flex-basis:100%"></div>
         <label class="f">Valor<input class="i num" name="monto" inputmode="numeric" required placeholder="$1.500.000"></label>
         <label class="f">Fecha<input class="i" type="date" name="fecha" value="${ymd(new Date())}"></label>
@@ -1372,7 +1499,7 @@ function vBase() {
 }
 function initBase() {
   const f = $('#fBase'); if (!f) return;
-  const AY = { ingreso:'Plata nueva que sale de tu bolsillo para el negocio (base, sencillo…).',
+  const AY = { ingreso:'Plata que sale de tu bolsillo para el negocio (base, sencillo para devueltas…). Las compras y gastos se descuentan solos de la plata del negocio.',
     desde_ventas:'Pasa plata de lo vendido a la base para comprar. No cuenta como plata nueva tuya. Después registra la compra en Compras.',
     retiro:'Plata que sacas del negocio para ti.' };
   const upd = () => { f.querySelectorAll('label.chip').forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); $('#bAyuda').textContent = AY[f.tipo.value]; };
@@ -1399,7 +1526,7 @@ function afterRender() {
   };
   const p1 = $('#pd1'), p2 = $('#pd2');
   if (p1) [p1, p2].forEach(x => x.onchange = () => { S.per.d1 = p1.value; S.per.d2 = p2.value; recargar({catalogo:false}); });
-  initCompras(); initGastos(); initBase();
+  initCompras(); initGastos(); initBase(); initCierre();
 }
 
 // Cantidad escrita a mano en el cuadrito de Vender
@@ -1445,7 +1572,7 @@ document.addEventListener('click', async e => {
     case 'editProd': mProducto(+v); break;
     case 'traslado': mTraslado(+v); break;
     case 'conteo': mConteo(); break;
-    case 'enviar': mEnviar(); break;
+    case 'enviar': mEnviar(v ? +v : undefined); break;
     case 'enviarPt': mEnviar(+v); break;
     case 'conteoPt': mConteo(+v); break;
     case 'sug': { const f = $('#fCompra'); f.pventa.value = v; f.pventa.dispatchEvent(new Event('input')); break; }
@@ -1460,6 +1587,16 @@ document.addEventListener('click', async e => {
       const t = {delGasto:'gastos', delBase:'base_movs', delLiq:'liquidaciones'}[a];
       const r = await sb.from(t).delete().eq('id', +v); if (r.error) toast(errMsg(r.error), 'bad'); else { toast('Borrado', 'ok'); recargar({catalogo:false}); } break; }
     case 'liquidar': mLiquidar(); break;
+    case 'pvC': S.pvC = +v; render(); break;
+    case 'cerrarJ': cerrarJornada(+v); break;
+    case 'verCierre': mDetalleCierre(+v); break;
+    case 'waCierre': { const c = S.cierres.find(x => x.id === +v); if (c) window.open('https://wa.me/?text=' + encodeURIComponent(textoCierre(c)), '_blank'); break; }
+    case 'delGastoJ':
+      if (!await confirmar('¿Borrar este gasto?', 'Borrar', true)) break;
+      try { await rpc('borrar_gasto_jornada', {p_id:+v}); toast('Borrado', 'ok'); recargar({catalogo:false}); } catch (er) { toast(errMsg(er), 'bad'); } break;
+    case 'reabrirJ':
+      if (!await confirmar('¿Reabrir esta jornada? Lo vendido vuelve al inventario y la puedes volver a cerrar.', 'Reabrir', true)) break;
+      try { await rpc('reabrir_jornada', {p_cierre:+v}); closeModal(); toast('Jornada reabierta', 'ok'); recargar(); } catch (er) { toast(errMsg(er), 'bad'); } break;
     case 'nuevoFijo': mFijo(); break;
     case 'editFijo': mFijo(+v); break;
     case 'pagarFijo': S.pagarFijo = +v; render(); $('#fGasto')?.scrollIntoView({behavior:'smooth', block:'center'}); break;
