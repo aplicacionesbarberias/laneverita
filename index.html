@@ -648,11 +648,37 @@ function render() {
   marcarSync();
   if (!S.loaded) { $('#main').innerHTML = `<div class="loading"><div class="spin"></div>Cargando…</div>`; return; }
   const V = { resumen:vResumen, cierre:vCierre, vender:vVender, inventario:vInventario, ventas:vVentas, compras:vCompras, gastos:vGastos, base:vBase }[S.tab];
+  // Si la app se refresca sola mientras alguien está llenando un formulario, no se pierde lo escrito
+  const mismoTab = S._tabRender === S.tab, snap = mismoTab ? snapForms() : null;
   $('#main').innerHTML = V();
   afterRender();
+  if (snap) restoreForms(snap);
+  S._tabRender = S.tab;
   if (yaHay) window.scrollTo(0, scroll);
 }
 
+function snapForms() {
+  const o = {};
+  document.querySelectorAll('#main form[id]').forEach(f => {
+    const v = {};
+    [...f.elements].forEach(el => { if (!el.name || el.type === 'hidden') return;
+      if (el.type === 'radio') { if (el.checked) v[el.name] = el.value; }
+      else if (el.type === 'checkbox') v[el.name] = el.checked; else v[el.name] = el.value; });
+    o[f.id] = v;
+  });
+  return o;
+}
+function restoreForms(o) {
+  for (const [id, v] of Object.entries(o)) {
+    const f = document.getElementById(id); if (!f) continue;
+    for (const [n, val] of Object.entries(v)) {
+      const els = f.querySelectorAll(`[name="${n}"]`);
+      els.forEach(el => { if (el.type === 'radio') el.checked = el.value === val; else if (el.type === 'checkbox') el.checked = !!val;
+        else if (el.tagName === 'SELECT') { if ([...el.options].some(op => op.value === val)) el.value = val; } else el.value = val; });
+    }
+    if (id === 'fCompra') { $('#cNuevo')?.classList.toggle('hidden', f.prod.value !== 'nuevo'); f.paq?.dispatchEvent(new Event('input')); }
+  }
+}
 function periodoBar() {
   const ops = [['hoy','Hoy'],['semana','Esta semana'],['mes','Este mes'],['todo','Todo']];
   if (!ops.some(o => o[0] === S.per.tipo)) S.per.tipo = 'semana';
@@ -906,7 +932,7 @@ function initCierre() {
     ff.pid.value = ''; ff.cant.value = ''; calcCierre(); toast(`Fiado a ${cli}`, 'ok'); };
   const fg = $('#fGastoJ');
   if (fg) fg.onsubmit = async e => { e.preventDefault();
-    try { await rpc('gasto_jornada', {p_cierre:cid, p_concepto:fg.c.value.trim(), p_monto:num(fg.m.value)}); toast('Gasto agregado', 'ok'); recargar({catalogo:false}); } catch (er) { toast(errMsg(er), 'bad'); } };
+    try { await rpc('gasto_jornada', {p_cierre:cid, p_concepto:fg.c.value.trim(), p_monto:num(fg.m.value)}); fg.reset(); toast('Gasto agregado', 'ok'); recargar({catalogo:false}); } catch (er) { toast(errMsg(er), 'bad'); } };
   calcCierre();
 }
 async function cerrarJornada(cid) {
@@ -1414,7 +1440,7 @@ function initCompras() {
       // guardar la presentación en el producto para la próxima vez
       { const x = prod(+pid), upp = Math.round(num(f.upp.value)), pp = num(f.ppaq.value);
         if (!x || x.unidades_paquete !== upp || +x.precio_paquete !== pp) await sb.from('productos').update({unidades_paquete:upp, precio_paquete:pp}).eq('id', +pid); }
-      toast('Compra guardada y sumada al inventario', 'ok'); recargar();
+      f.reset(); toast('Compra guardada y sumada al inventario', 'ok'); recargar();
     } catch (er) { toast(errMsg(er), 'bad'); btn.disabled = false; btn.textContent = 'Guardar compra'; }
   };
 }
@@ -1450,7 +1476,7 @@ function initGastos() {
     const r = await sb.from('gastos').insert({concepto:f.concepto.value.trim(), categoria:f.cat.value, punto_id:f.pt.value ? +f.pt.value : null,
       monto:num(f.monto.value), fecha:fechaISO(f.fecha.value), metodo:f.metodo.value, pagado_con:f.pagado.value, nota:f.nota.value.trim() || null, fijo_id:S.pagarFijo});
     if (r.error) { btn.disabled = false; return toast(errMsg(r.error), 'bad'); }
-    S.pagarFijo = null; toast('Gasto guardado', 'ok'); recargar({catalogo:false});
+    S.pagarFijo = null; f.reset(); toast('Gasto guardado', 'ok'); recargar({catalogo:false});
   };
 }
 function mFijo(id) {
@@ -1634,7 +1660,12 @@ document.addEventListener('click', async e => {
   }
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
-window.addEventListener('focus', () => { if (S.user && S.loaded) recargar({silencioso:true}); });
+// Actualizar solo cuando vuelven a la app después de un rato (no cada vez que se abre una lista o el teclado)
+let ocultaDesde = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) ocultaDesde = Date.now();
+  else if (S.user && S.loaded && ocultaDesde && Date.now() - ocultaDesde > 30000) recargar({silencioso:true});
+});
 
 /* ---------- instalar como app ---------- */
 let eventoInstalar = null;
