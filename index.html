@@ -804,6 +804,9 @@ function mMeterPlata(tipo = 'ingreso') {
 /* ---------- CIERRE DE JORNADA ---------- */
 const draftKey = id => 'nv-quedo-' + id;
 const fiadoKey = id => 'nv-fiado-' + id;
+// Borrador del conteo y de los fiados: lo del celular, o si no hay, lo que quedó guardado al cerrar (por si se reabrió)
+const quedoDraft = ab => lsGet(draftKey(ab.id)) ?? Object.fromEntries((ab.quedo || []).map(x => [x.producto_id, String(x.quedo)]));
+const fiaDraft = ab => lsGet(fiadoKey(ab.id)) ?? (ab.fiados || []).flatMap(f => (f.items || []).map(it => ({cliente:f.cliente, producto_id:+it.producto_id, cantidad:+it.cantidad})));
 const costo_ = id => +S.costos[id] || 0;
 function resumenCierre(c) {
   const items = (c.venta && !c.venta.anulada) ? (c.venta.venta_items || []) : [];
@@ -828,7 +831,7 @@ function vCierre() {
       <button class="btn ok" style="align-self:flex-end">Abrir jornada</button></form></div>
     ${vFiados(pv)}
     ${historial}`;
-  const ini = ab.inicial || {}, draft = lsGet(draftKey(ab.id)) || {};
+  const ini = ab.inicial || {}, draft = quedoDraft(ab);
   const prods = S.productos.filter(x => x.activo && (stk(pv, x.id) > 0 || (+ini[x.id] || 0) > 0)).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const G = S.gJornada[ab.id] || [];
   return `${head}
@@ -875,7 +878,7 @@ function calcCierre() {
   });
   const ab = S.cierres.find(c => c.id === +$('[data-a=cerrarJ]')?.dataset.v);
   const gastos = sum((ab && S.gJornada[ab.id]) || [], g => g.monto);
-  const FL = ab ? (lsGet(fiadoKey(ab.id)) || []) : [];
+  const FL = ab ? fiaDraft(ab) : [];
   const fiado = sum(FL, f => f.cantidad * (prod(f.producto_id)?.precio_venta || 0));
   const fl = $('#fiaLista');
   if (fl) fl.innerHTML = FL.map((f, k) => `<div class="li"><div class="m"><b>${esc(f.cliente)}</b><span>${f.cantidad} × ${esc(prod(f.producto_id)?.nombre)}</span></div><div class="a num" style="color:var(--warn)">${$$(f.cantidad * (prod(f.producto_id)?.precio_venta || 0))}</div><button class="ibtn" data-a="delFiaJ" data-v="${k}">${ic('trash')}</button></div>`).join('');
@@ -894,12 +897,12 @@ function initCierre() {
   if (fa) fa.onsubmit = async e => { e.preventDefault(); const pv = S.dueno ? (S.pvC || pVenta()[0]?.id) : S.perfil.punto_id;
     try { await rpc('abrir_jornada', {p_punto:pv, p_nombre:fa.nom.value}); toast('Jornada abierta', 'ok'); recargar({periodo:false}); } catch (er) { toast(errMsg(er), 'bad'); } };
   const btn = $('[data-a=cerrarJ]'); const cid = btn ? +btn.dataset.v : null;
-  document.querySelectorAll('input.qd').forEach(i => i.addEventListener('input', () => { const d = lsGet(draftKey(cid)) || {}; if (i.value.trim() === '') delete d[i.dataset.p]; else d[i.dataset.p] = i.value; lsSet(draftKey(cid), d); calcCierre(); }));
+  document.querySelectorAll('input.qd').forEach(i => i.addEventListener('input', () => { const d = quedoDraft(S.cierres.find(c => c.id === cid)); if (i.value.trim() === '') delete d[i.dataset.p]; else d[i.dataset.p] = i.value; lsSet(draftKey(cid), d); calcCierre(); }));
   const ff = $('#fFia');
   if (ff) ff.onsubmit = e => { e.preventDefault();
     const cli = ff.cli.value.trim(), pid = +ff.pid.value, cant = Math.round(num(ff.cant.value));
     if (!cli || !pid || cant <= 0) return toast('Escribe quién, el producto y la cantidad', 'bad');
-    const L = lsGet(fiadoKey(cid)) || []; L.push({cliente:cli, producto_id:pid, cantidad:cant}); lsSet(fiadoKey(cid), L);
+    const L = fiaDraft(S.cierres.find(c => c.id === cid)); L.push({cliente:cli, producto_id:pid, cantidad:cant}); lsSet(fiadoKey(cid), L);
     ff.pid.value = ''; ff.cant.value = ''; calcCierre(); toast(`Fiado a ${cli}`, 'ok'); };
   const fg = $('#fGastoJ');
   if (fg) fg.onsubmit = async e => { e.preventDefault();
@@ -912,7 +915,7 @@ async function cerrarJornada(cid) {
   document.querySelectorAll('input.qd').forEach(i => { const hay = +i.dataset.hay; const vacio = i.value.trim() === ''; if (vacio) vacios++;
     items.push({producto_id:+i.dataset.p, quedo: vacio ? hay : Math.max(0, Math.round(num(i.value)))}); });
   const vend = sum(items, it => Math.max(0, stk(ab.punto_id, it.producto_id) - it.quedo) * (prod(it.producto_id)?.precio_venta || 0));
-  const FL = lsGet(fiadoKey(cid)) || [], fiado = sum(FL, f => f.cantidad * (prod(f.producto_id)?.precio_venta || 0));
+  const FL = fiaDraft(ab), fiado = sum(FL, f => f.cantidad * (prod(f.producto_id)?.precio_venta || 0));
   if (!await confirmar(`¿Cerrar “${esc(ab.nombre)}”? Salió ${$$(vend)}${fiado ? ` (fiado ${$$(fiado)})` : ''}.${vacios ? ` ${vacios} producto(s) sin contar se toman como no vendidos.` : ''}`, 'Sí, cerrar')) return;
   try { await rpc('cerrar_jornada', {p_cierre:cid, p_items:items, p_fiados:FL}); try { localStorage.removeItem(draftKey(cid)); localStorage.removeItem(fiadoKey(cid)); } catch {}
     toast('Jornada cerrada', 'ok'); await recargar(); mDetalleCierre(cid);
@@ -1602,15 +1605,15 @@ document.addEventListener('click', async e => {
     case 'pagarPrestamo': mMeterPlata('pago_prestamo'); break;
     case 'pvC': S.pvC = +v; render(); break;
     case 'cerrarJ': cerrarJornada(+v); break;
-    case 'delFiaJ': { const cid = +$('[data-a=cerrarJ]')?.dataset.v; const L = lsGet(fiadoKey(cid)) || []; L.splice(+v, 1); lsSet(fiadoKey(cid), L); calcCierre(); break; }
+    case 'delFiaJ': { const cid = +$('[data-a=cerrarJ]')?.dataset.v; const L = fiaDraft(S.cierres.find(c => c.id === cid)); L.splice(+v, 1); lsSet(fiadoKey(cid), L); calcCierre(); break; }
     case 'verCierre': mDetalleCierre(+v); break;
     case 'waCierre': { const c = S.cierres.find(x => x.id === +v); if (c) window.open('https://wa.me/?text=' + encodeURIComponent(textoCierre(c)), '_blank'); break; }
     case 'delGastoJ':
       if (!await confirmar('¿Borrar este gasto?', 'Borrar', true)) break;
       try { await rpc('borrar_gasto_jornada', {p_id:+v}); toast('Borrado', 'ok'); recargar({catalogo:false}); } catch (er) { toast(errMsg(er), 'bad'); } break;
     case 'reabrirJ':
-      if (!await confirmar('¿Reabrir esta jornada? Lo vendido vuelve al inventario y la puedes volver a cerrar.', 'Reabrir', true)) break;
-      try { await rpc('reabrir_jornada', {p_cierre:+v}); closeModal(); toast('Jornada reabierta', 'ok'); recargar(); } catch (er) { toast(errMsg(er), 'bad'); } break;
+      if (!await confirmar('¿Reabrir esta jornada? Se conserva lo que contaste, los fiados y los gastos: solo corriges lo que faltó y la vuelves a cerrar.', 'Reabrir', true)) break;
+      try { try { localStorage.removeItem(draftKey(+v)); localStorage.removeItem(fiadoKey(+v)); } catch {} await rpc('reabrir_jornada', {p_cierre:+v}); closeModal(); toast('Jornada reabierta', 'ok'); recargar(); } catch (er) { toast(errMsg(er), 'bad'); } break;
     case 'nuevoFijo': mFijo(); break;
     case 'editFijo': mFijo(+v); break;
     case 'pagarFijo': S.pagarFijo = +v; render(); $('#fGasto')?.scrollIntoView({behavior:'smooth', block:'center'}); break;
