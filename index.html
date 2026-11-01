@@ -402,7 +402,7 @@ const S = {
   user:null, perfil:null, dueno:false, tab:null,
   puntos:[], productos:[], stock:{}, costos:{},
   per:{tipo:'semana', d1:null, d2:null}, fPunto:0,
-  ventas:[], vcost:{}, compras:[], gastos:[], base:[], ajustes:[], liqs:[], salidas:[], cierres:[], gJornada:{}, cCostos:{}, pvC:null, fiadosPend:[], cobrados:[], fiadoAbierto:null, fijos:[], gastosMes:[], tot:null, salidaSel:null, pagarFijo:null,
+  ventas:[], vcost:{}, compras:[], gastos:[], base:[], ajustes:[], liqs:[], salidas:[], abonos:[], cierres:[], gJornada:{}, cCostos:{}, pvC:null, fiadosPend:[], cobrados:[], fiadoAbierto:null, fijos:[], gastosMes:[], tot:null, salidaSel:null, pagarFijo:null,
   pv:null, carrito:{}, busq:'', cat:'Todas', recibido:'', cartOpen:false,
   invBusq:'', invInact:false, busy:false, loaded:false
 };
@@ -479,7 +479,8 @@ async function cargarPeriodo() {
   const rng = q => q.gte('fecha', A).lt('fecha', B).order('fecha', {ascending:false});
   const tareas = [all(() => rng(sb.from('ventas').select('*, venta_items(*)'))), all(() => rng(sb.from('salidas_caja').select('*'))),
     all(() => sb.from('ventas').select('*, venta_items(*)').eq('fiado', true).is('pagado_en', null).eq('anulada', false).order('fecha')),
-    all(() => sb.from('ventas').select('id,total,punto_id,cliente,fecha,pagado_en').eq('anulada', false).gte('pagado_en', A).lt('pagado_en', B))];
+    all(() => sb.from('ventas').select('id,total,punto_id,cliente,fecha,pagado_en').eq('anulada', false).gte('pagado_en', A).lt('pagado_en', B)),
+    all(() => sb.from('abonos').select('*').order('fecha'))];
   if (S.dueno) tareas.push(
     all(() => rng(sb.from('venta_costos').select('item_id,costo_unit,fecha'))),
     all(() => rng(sb.from('compras').select('*'))),
@@ -492,10 +493,10 @@ async function cargarPeriodo() {
     all(() => sb.from('gastos').select('*').not('fijo_id', 'is', null).gte('fecha', inicioMes().toISOString()))
   );
   const r = await Promise.all(tareas);
-  S.ventas = r[0]; S.salidas = r[1]; S.fiadosPend = r[2]; S.cobrados = r[3];
+  S.ventas = r[0]; S.salidas = r[1]; S.fiadosPend = r[2]; S.cobrados = r[3]; S.abonos = r[4];
   if (S.dueno) {
-    S.vcost = {}; r[4].forEach(x => S.vcost[x.item_id] = +x.costo_unit);
-    [S.compras, S.gastos, S.base, S.ajustes, S.liqs, S.tot, S.fijos, S.gastosMes] = r.slice(5);
+    S.vcost = {}; r[5].forEach(x => S.vcost[x.item_id] = +x.costo_unit);
+    [S.compras, S.gastos, S.base, S.ajustes, S.liqs, S.tot, S.fijos, S.gastosMes] = r.slice(6);
   }
 }
 function guardarCache() {
@@ -834,13 +835,16 @@ const fiadoKey = id => 'nv-fiado-' + id;
 const quedoDraft = ab => lsGet(draftKey(ab.id)) ?? Object.fromEntries((ab.quedo || []).map(x => [x.producto_id, String(x.quedo)]));
 const fiaDraft = ab => lsGet(fiadoKey(ab.id)) ?? (ab.fiados || []).flatMap(f => (f.items || []).map(it => ({cliente:f.cliente, producto_id:+it.producto_id, cantidad:+it.cantidad})));
 const costo_ = id => +S.costos[id] || 0;
+// lo que pagaron de fiados en esa cancha mientras la jornada estuvo abierta
+const cobradoJornada = c => sum(S.abonos.filter(a => a.punto_id === c.punto_id && a.fecha >= c.abierto_en && (!c.cerrado_en || a.fecha <= c.cerrado_en)), a => a.monto);
 function resumenCierre(c) {
   const items = (c.venta && !c.venta.anulada) ? (c.venta.venta_items || []) : [];
   const fiados = (c.fiados || []).flatMap(f => (f.items || []).map(it => { const x = prod(it.producto_id); return {cliente:f.cliente, producto_id:it.producto_id, nombre:x?.nombre || '¿?', cantidad:it.cantidad, precio:x?.precio_venta || 0}; }));
   const fiadoT = sum(fiados, f => f.cantidad * f.precio), fiadoC = sum(fiados, f => f.cantidad * costo_(f.producto_id));
   const vendido = sum(items, it => it.subtotal), costoV = sum(items, it => (S.cCostos[it.id] ?? 0) * it.cantidad);
   const gastos = sum(S.gJornada[c.id] || [], g => g.monto);
-  return { items, fiados, fiadoT, vendido, costoV, ganancia: vendido + fiadoT - costoV - fiadoC, gastos, utilidad: vendido + fiadoT - costoV - fiadoC - gastos, plata: vendido - gastos };
+  const cobrado = cobradoJornada(c);
+  return { items, fiados, fiadoT, vendido, costoV, cobrado, ganancia: vendido + fiadoT - costoV - fiadoC, gastos, utilidad: vendido + fiadoT - costoV - fiadoC - gastos, plata: vendido - gastos + cobrado };
 }
 function vCierre() {
   const pv = S.dueno ? (S.pvC && pVenta().some(p => p.id === S.pvC) ? S.pvC : pVenta()[0]?.id) : S.perfil.punto_id;
@@ -906,6 +910,7 @@ function calcCierre() {
   const gastos = sum((ab && S.gJornada[ab.id]) || [], g => g.monto);
   const FL = ab ? fiaDraft(ab) : [];
   const fiado = sum(FL, f => f.cantidad * (prod(f.producto_id)?.precio_venta || 0));
+  const cobrado = ab ? cobradoJornada(ab) : 0;
   const fl = $('#fiaLista');
   if (fl) fl.innerHTML = FL.map((f, k) => `<div class="li"><div class="m"><b>${esc(f.cliente)}</b><span>${f.cantidad} × ${esc(prod(f.producto_id)?.nombre)}</span></div><div class="a num" style="color:var(--warn)">${$$(f.cantidad * (prod(f.producto_id)?.precio_venta || 0))}</div><button class="ibtn" data-a="delFiaJ" data-v="${k}">${ic('trash')}</button></div>`).join('');
   tb.innerHTML = `<h3>Resultado de la jornada</h3><table class="t"><tbody>
@@ -913,8 +918,9 @@ function calcCierre() {
     ${fiado ? `<tr><td class="muted">− Fiado (no han pagado)</td><td class="r num" style="color:var(--warn)">${$$(fiado)}</td></tr>` : ''}
     ${S.dueno ? `<tr><td class="muted">− Lo que costó lo vendido</td><td class="r num">${$$(costo)}</td></tr><tr><td>= Ganancia</td><td class="r num pos">${$$(vend - costo)}</td></tr>` : ''}
     <tr><td class="muted">− Gastos</td><td class="r num neg">${$$(gastos)}</td></tr>
+    ${cobrado ? `<tr><td class="muted">+ Cobrado de fiados</td><td class="r num pos">${$$(cobrado)}</td></tr>` : ''}
     ${S.dueno ? `<tr><td><b>= Utilidad</b></td><td class="r num ${vend - costo - gastos < 0 ? 'neg' : 'pos'}"><b>${$$(vend - costo - gastos)}</b></td></tr>` : ''}
-  </tbody><tfoot><tr><td>Plata que debe haber</td><td class="r num" style="font-size:18px">${$$(vend - fiado - gastos)}</td></tr></tfoot></table>
+  </tbody><tfoot><tr><td>Plata que debe haber</td><td class="r num" style="font-size:18px">${$$(vend - fiado - gastos + cobrado)}</td></tr></tfoot></table>
   ${vacios ? `<div class="small" style="color:var(--warn);margin-top:6px">${vacios} producto${vacios > 1 ? 's' : ''} sin contar</div>` : ''}`;
 }
 function initCierre() {
@@ -949,7 +955,7 @@ async function cerrarJornada(cid) {
 }
 function textoCierre(c) {
   const R = resumenCierre(c);
-  return `*${CONFIG.NOMBRE}*\n${c.nombre} · ${nombrePunto(c.punto_id)}\n${fFecha(c.abierto_en)} → ${c.cerrado_en ? fFecha(c.cerrado_en) : 'abierta'}\n\n${R.items.map(it => `• ${it.cantidad} × ${it.nombre} = ${$$(it.subtotal)}`).join('\n')}\n\n*VENDIDO DE CONTADO: ${$$(R.vendido)}*${R.fiados.length ? '\nFiado: ' + R.fiados.map(f => `${f.cliente} ${f.cantidad}× ${f.nombre}`).join(', ') + ` = ${$$(R.fiadoT)}` : ''}${R.gastos ? `\nGastos: −${$$(R.gastos)}` : ''}\n*PLATA QUE DEBE HABER: ${$$(R.plata)}*`;
+  return `*${CONFIG.NOMBRE}*\n${c.nombre} · ${nombrePunto(c.punto_id)}\n${fFecha(c.abierto_en)} → ${c.cerrado_en ? fFecha(c.cerrado_en) : 'abierta'}\n\n${R.items.map(it => `• ${it.cantidad} × ${it.nombre} = ${$$(it.subtotal)}`).join('\n')}\n\n*VENDIDO DE CONTADO: ${$$(R.vendido)}*${R.fiados.length ? '\nFiado: ' + R.fiados.map(f => `${f.cliente} ${f.cantidad}× ${f.nombre}`).join(', ') + ` = ${$$(R.fiadoT)}` : ''}${R.gastos ? `\nGastos: −${$$(R.gastos)}` : ''}${R.cobrado ? `\nCobrado de fiados: +${$$(R.cobrado)}` : ''}\n*PLATA QUE DEBE HABER: ${$$(R.plata)}*`;
 }
 function mDetalleCierre(id) {
   const c = S.cierres.find(x => x.id === id); if (!c) return;
@@ -964,6 +970,7 @@ function mDetalleCierre(id) {
       ${R.fiados.map(f => `<tr><td class="muted">Fiado: ${esc(f.cliente)} · ${f.cantidad}× ${esc(f.nombre)}</td><td class="r num" style="color:var(--warn)">${$$(f.cantidad * f.precio)}</td></tr>`).join('')}
       ${S.dueno ? `<tr><td class="muted">− Lo que costó lo vendido</td><td class="r num">${$$(R.costoV)}</td></tr>` : ''}
       ${G.map(g => `<tr><td class="muted">− ${esc(g.concepto)}</td><td class="r num neg">${$$(g.monto)}</td></tr>`).join('')}
+      ${R.cobrado ? `<tr><td class="muted">+ Cobrado de fiados</td><td class="r num pos">${$$(R.cobrado)}</td></tr>` : ''}
       ${S.dueno ? `<tr><td><b>= Utilidad</b></td><td class="r num ${R.utilidad < 0 ? 'neg' : 'pos'}"><b>${$$(R.utilidad)}</b></td></tr>` : ''}
     </tbody><tfoot><tr><td>Plata que debe haber</td><td class="r num">${$$(R.plata)}</td></tr></tfoot></table>
     <div class="acts">${S.dueno ? `<button class="btn danger sm" data-a="reabrirJ" data-v="${c.id}">Reabrir</button>` : ''}<button class="btn line" data-a="waCierre" data-v="${c.id}">${ic('wa')}WhatsApp</button><button class="btn" data-a="close">Listo</button></div>`, 'wide');
@@ -1222,21 +1229,51 @@ function liq(p) {
   const sal = sum(S.salidas.filter(x => !p || x.punto_id === p), x => x.monto);
   return { vendido, fiadoNuevo, contado, cobrado, sal, debe: contado + cobrado - sal };
 }
-function vFiados(p) {
-  const F = S.fiadosPend.filter(v => !p || v.punto_id === p);
+const abonado = v => sum(S.abonos.filter(a => a.venta_id === v.id), a => a.monto);
+const saldoV = v => +v.total - abonado(v);
+function gruposFiado(p) {
   const cl = {};
-  F.forEach(v => { const k = v.cliente.trim().toLowerCase(); const c = cl[k] ||= {n:v.cliente.trim(), t:0, vs:[]}; c.t += +v.total; c.vs.push(v); });
-  const lista = Object.entries(cl).sort((a, b) => b[1].t - a[1].t);
+  S.fiadosPend.filter(v => !p || v.punto_id === p).forEach(v => {
+    const k = v.punto_id + '|' + v.cliente.trim().toLowerCase();
+    const c = cl[k] ||= {k, n:v.cliente.trim(), punto:v.punto_id, t:0, ab:0, vs:[]};
+    c.t += +v.total; c.ab += abonado(v); c.vs.push(v);
+  });
+  return Object.values(cl).sort((a, b) => (b.t - b.ab) - (a.t - a.ab));
+}
+function vFiados(p) {
+  const lista = gruposFiado(p), totalDebe = sum(lista, c => c.t - c.ab);
   const dias = d => Math.floor((Date.now() - new Date(d)) / 864e5);
   return `<div class="card" style="${lista.length ? 'border:2px solid var(--warn-soft)' : ''}">
-    <div class="row between"><h3 style="margin:0">Fiados por cobrar</h3><b class="num" style="color:var(--warn)">${$$(sum(F, v => v.total))}</b></div>
-    ${lista.length ? lista.map(([k, c]) => { const viejo = dias(c.vs[0].fecha); const ab = S.fiadoAbierto === k; return `<div class="li" style="flex-wrap:wrap">
-      <div class="m" data-a="fiadoVer" data-v="${esc(k)}" style="cursor:pointer"><b>${esc(c.n)}</b><span>${c.vs.length} ${c.vs.length === 1 ? 'fiado' : 'fiados'} · desde ${fFecha(c.vs[0].fecha)} ${viejo >= 1 ? `(<span class="${viejo >= 7 ? 'neg' : ''}">hace ${viejo} día${viejo === 1 ? '' : 's'}</span>)` : '(hoy)'} · ${ab ? 'ocultar' : 'ver detalle'}</span></div>
-      <div class="a num">${$$(c.t)}</div><button class="btn sm ok" data-a="pagarCliente" data-v="${esc(k)}">Pagó</button>
-      ${ab ? `<div style="flex-basis:100%">${c.vs.map(v => `<div class="row between small" style="padding:6px 0;border-top:1px dashed var(--line);flex-wrap:nowrap"><span>${fFecha(v.fecha)} · ${(v.venta_items||[]).map(it => `${it.cantidad}× ${esc(it.nombre)}`).join(', ')}${S.dueno ? ' · ' + esc(nombrePunto(v.punto_id)) : ''}</span><span class="row" style="gap:6px;flex-wrap:nowrap"><b class="num">${$$(v.total)}</b><button class="btn sm line" data-a="pagarFiado" data-v="${v.id}">Pagó esta</button></span></div>`).join('')}</div>` : ''}
+    <div class="row between"><h3 style="margin:0">Fiados por cobrar</h3><b class="num" style="color:var(--warn)">${$$(totalDebe)}</b></div>
+    ${lista.length ? lista.map(c => { const viejo = dias(c.vs[0].fecha); const abierto = S.fiadoAbierto === c.k;
+      const abs = S.abonos.filter(a => c.vs.some(v => v.id === a.venta_id));
+      return `<div class="li" style="flex-wrap:wrap">
+      <div class="m" data-a="fiadoVer" data-v="${esc(c.k)}" style="cursor:pointer"><b>${esc(c.n)}</b><span>${S.dueno && !p ? esc(nombrePunto(c.punto)) + ' · ' : ''}desde ${fFecha(c.vs[0].fecha)} ${viejo >= 1 ? `(<span class="${viejo >= 7 ? 'neg' : ''}">hace ${viejo} día${viejo === 1 ? '' : 's'}</span>)` : '(hoy)'}${c.ab ? ` · abonó ${$$(c.ab)} de ${$$(c.t)}` : ''} · ${abierto ? 'ocultar' : 'ver detalle'}</span></div>
+      <div class="a num" style="text-align:right"><small class="muted" style="display:block;font-weight:500;font-size:11px">Debe</small>${$$(c.t - c.ab)}</div>
+      <div class="row" style="gap:6px;flex-basis:100%;justify-content:flex-end;margin-top:6px"><button class="btn sm ghost" data-a="abonar" data-v="${esc(c.k)}">Abonar</button><button class="btn sm ok" data-a="pagarCliente" data-v="${esc(c.k)}">Pagó todo</button></div>
+      ${abierto ? `<div style="flex-basis:100%">${c.vs.map(v => `<div class="row between small" style="padding:6px 0;border-top:1px dashed var(--line);flex-wrap:nowrap"><span>${fFecha(v.fecha)} · ${(v.venta_items||[]).map(it => `${it.cantidad}× ${esc(it.nombre)}`).join(', ') || esc(v.vendedor || 'Fiado')}</span><b class="num">${$$(v.total)}</b></div>`).join('')}
+        ${abs.map(a => `<div class="row between small" style="padding:6px 0;border-top:1px dashed var(--line)"><span class="pos">Abono ${fFecha(a.fecha)} ${fHora(a.fecha)}${a.quien ? ' · ' + esc(a.quien) : ''}</span><b class="num pos">−${$$(a.monto)}</b></div>`).join('')}</div>` : ''}
     </div>`; }).join('')
     : '<div class="small muted" style="margin-top:6px">Nadie debe. Para fiar, en el cierre de la jornada usa “Fiado en esta jornada”.</div>'}
   </div>`;
+}
+function mAbonar(k) {
+  const c = gruposFiado(0).find(x => x.k === k); if (!c) return;
+  const debe = c.t - c.ab;
+  const ov = modal(`<h3>Abono de ${esc(c.n)}</h3>
+    <p class="small muted" style="margin-top:-6px">Debe <b>${$$(debe)}</b>${c.ab ? ` (ya abonó ${$$(c.ab)})` : ''}. Escribe cuánto está pagando ahora.</p>
+    <form id="fAb" class="row" style="gap:12px">
+      <label class="f">¿Cuánto paga?<input class="i num" name="m" inputmode="numeric" required placeholder="$0"></label>
+      <div class="small" id="abQ" style="flex-basis:100%"></div>
+      <div class="acts" style="flex-basis:100%"><button type="button" class="btn line" data-a="close">Cancelar</button><button class="btn ok">Guardar abono</button></div>
+    </form>`);
+  const f = ov.querySelector('#fAb');
+  f.m.oninput = () => { const m = num(f.m.value); ov.querySelector('#abQ').innerHTML = m ? (m > debe ? `<span class="neg">Solo debe ${$$(debe)}</span>` : `Le queda debiendo <b>${$$(debe - m)}</b>`) : ''; };
+  f.onsubmit = async e => { e.preventDefault(); const m = num(f.m.value);
+    if (m <= 0 || m > debe) return toast(m > debe ? `Solo debe ${$$(debe)}` : 'Escribe cuánto paga', 'bad');
+    try { const resta = await rpc('abonar_fiado', {p_punto:c.punto, p_cliente:c.n, p_monto:m}); closeModal();
+      toast(+resta > 0 ? `Abono guardado · le queda ${$$(resta)}` : `${c.n} quedó a paz y salvo`, 'ok'); recargar({catalogo:false});
+    } catch (er) { toast(errMsg(er), 'bad'); } };
 }
 function textoLiquidacion() {
   const p = S.dueno ? S.fPunto : S.perfil.punto_id; const V = ventasVal(p); const pp = {};
@@ -1599,8 +1636,8 @@ document.addEventListener('click', async e => {
     case 'fiar': mFiar(); break;
     case 'fiadoVer': S.fiadoAbierto = S.fiadoAbierto === v ? null : v; render(); break;
     case 'pagarCliente': case 'pagarFiado': {
-      const ids = a === 'pagarFiado' ? [+v] : S.fiadosPend.filter(x => x.cliente.trim().toLowerCase() === v).map(x => x.id);
-      const tot = sum(S.fiadosPend.filter(x => ids.includes(x.id)), x => x.total);
+      const ids = a === 'pagarFiado' ? [+v] : (gruposFiado(0).find(x => x.k === v)?.vs || []).map(x => x.id);
+      const tot = sum(S.fiadosPend.filter(x => ids.includes(x.id)), x => saldoV(x));
       const quien = S.fiadosPend.find(x => ids.includes(x.id))?.cliente || '';
       if (!await confirmar(`¿${esc(quien)} pagó ${$$(tot)}?`, 'Sí, pagó')) break;
       try { await rpc('pagar_fiado', {p_ids:ids}); toast('Fiado pagado · ' + $$(tot), 'ok'); recargar({catalogo:false}); } catch (er) { toast(errMsg(er), 'bad'); } break; }
@@ -1631,6 +1668,7 @@ document.addEventListener('click', async e => {
     case 'pagarPrestamo': mMeterPlata('pago_prestamo'); break;
     case 'pvC': S.pvC = +v; render(); break;
     case 'cerrarJ': cerrarJornada(+v); break;
+    case 'abonar': mAbonar(v); break;
     case 'delFiaJ': { const cid = +$('[data-a=cerrarJ]')?.dataset.v; const L = fiaDraft(S.cierres.find(c => c.id === cid)); L.splice(+v, 1); lsSet(fiadoKey(cid), L); calcCierre(); break; }
     case 'verCierre': mDetalleCierre(+v); break;
     case 'waCierre': { const c = S.cierres.find(x => x.id === +v); if (c) window.open('https://wa.me/?text=' + encodeURIComponent(textoCierre(c)), '_blank'); break; }
